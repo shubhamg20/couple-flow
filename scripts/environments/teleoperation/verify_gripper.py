@@ -2,7 +2,7 @@ import numpy as np
 from pathlib import Path
 import pickle
 
-episodes_dir = Path("source/recorded_runs/gr1t2/sushi/")
+episodes_dir = Path("source/recorded_runs/gr1t2/apple/")
 episode_files = sorted(episodes_dir.glob("episode*.pkl"))
 
 for episode_file in episode_files:

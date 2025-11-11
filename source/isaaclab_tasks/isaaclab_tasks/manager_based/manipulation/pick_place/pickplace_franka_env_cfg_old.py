@@ -46,68 +46,37 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     tiled_camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/Camera2",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(0.0, 1.4, 2.0), 
+            pos=(0.0, 1.2, 2.0), 
             rot=(.65, .27, .27, -.65),
             convention="world"
         ),
         update_latest_camera_pose=True,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=35.0, 
+            focal_length=18.14756, 
             focus_distance=400.0, 
             horizontal_aperture=34.32365, 
             clipping_range=(0.01, 10000000.0)
         ),
-        width=256,
-        height=256,
+        width=640,
+        height=640,
     )
     
     packing_table = AssetBaseCfg(
-        prim_path="/World/envs/env_.*/PackingTable2",
+        prim_path="/World/envs/env_.*/PackingTable",
         init_state=AssetBaseCfg.InitialStateCfg(pos=[0.0, 0.55, 0.0], rot=[1.0, 0.0, 0.0, 0.0]),
         spawn=UsdFileCfg(
-            usd_path=f"/workspace/isaaclab/source/gr1t2/exhaust_pipe_task/exhaust_pipe_assets/table.usd",
-            scale=(1.0, 1.0, 1.315),
-            # usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/packing_table.usd",
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                rigid_body_enabled=True,
-                kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
-                disable_gravity=False,
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                max_angular_velocity=1000.0,
-                max_linear_velocity=1000.0,
-                max_depenetration_velocity=5.0,
-            ),
-        ),
-    )
-
-    tray = AssetBaseCfg(
-        prim_path="/World/envs/env_.*/Tray",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.41, 0.42, 1], rot=[0.707, 0.707, 0.0, 0.0]),
-        spawn=UsdFileCfg(
-            usd_path=f"/workspace/isaaclab/usd_extracted/pink_plate_csm/pink_plate.usd",
-            scale=(0.15, 0.15, 0.15),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                rigid_body_enabled=True,
-                kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
-                disable_gravity=False,
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                max_angular_velocity=1000.0,
-                max_linear_velocity=1000.0,
-                max_depenetration_velocity=5.0,
-            ),
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/packing_table.usd",
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
         ),
     )
 
     sushi = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/Sushi",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]),
+        prim_path="/World/envs/env_.*/sushi",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.07, 0.45, 1.02], rot=[0.7071, 0, 0, 0.7071]),
         spawn=UsdFileCfg(
             # Use the physics-enabled sushi USD created by to_usd.py
             usd_path="/workspace/isaaclab/source/gr1t2/sushi_csm/sushi.usd",
-            # usd_path="/workspace/isaaclab/source/gr1t2/YCB/Axis_Aligned/011_sushi.usd",
             scale=(.1, .1, .1),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,
@@ -120,17 +89,17 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 max_depenetration_velocity=5.0,
             ),
             # Note: Mass is already defined in the USD file (0.12kg), but we can override it
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),  # Use realistic sushi mass
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.12),  # Use realistic sushi mass
         ),
     )
 
     apple = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Apple",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.35, 0.45, 1], rot=[.6, .7, 0, 0]),
         spawn=UsdFileCfg(
             # Use the physics-enabled apple USD
             usd_path="/workspace/isaaclab/usd_extracted/apple_csm/apple.usd",
-            scale=(.05, .075, .07),
+            scale=(.1, .1, .1),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,
                 kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
@@ -142,19 +111,16 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 max_depenetration_velocity=5.0,
             ),
             # Apple mass (typical apple is around 0.18kg)
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.18),
         ),
     )
 
     mug = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Mug",
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.07, 0.35, 1.0], rot=[0, 0, 0, 1]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.37, 1.0], rot=[.0, 0.0, -.707, -.707]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.43, 1.0], rot=[.02, 0.03, -.6, -.7]),
         spawn=UsdFileCfg(
             # Use the physics-enabled mug USD
-            # usd_path="/workspace/isaaclab/source/gr1t2/Mugs/SM_Mug_C1.usd",
             usd_path="/workspace/isaaclab/usd_extracted/mug_csm/mug.usd",
-            # scale=(.009, .009, .009),
             scale=(.1, .1, .1),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,
@@ -167,7 +133,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 max_depenetration_velocity=5.0,
             ),
             # Mug mass (typical mug is around 0.25kg)
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.25),
         ),
     )
     
@@ -323,56 +289,44 @@ class EventCfg:
         },
     )
 
-    reset_objects = EventTerm(func=mdp.swap_objects, mode="reset",
-                              params={
-                                  "pose_ranges": {
-                                      "x": [-0.03, 0.03],
-                                      "y": [-0.04, 0.01],
-                                  },
-                                  "asset_cfgs": [
-                                      SceneEntityCfg("sushi"),
-                                      SceneEntityCfg("apple"),
-                                      SceneEntityCfg("mug"),
-                                  ]
-                              })
-    # reset_sushi = EventTerm(
-    #     func=mdp.reset_root_state_uniform,
-    #     mode="reset",
-    #     params={
-    #         "pose_range": {
-    #             "x": [-0.03, 0.03],
-    #             "y": [-0.03, 0.03],
-    #         },
-    #         "velocity_range": {},
-    #         "asset_cfg": SceneEntityCfg("sushi"),
-    #     },
-    # )
+    reset_sushi = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {
+                "x": [-0.01, 0.01],
+                "y": [-0.01, 0.01],
+            },
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("sushi"),
+        },
+    )
 
-    # reset_apple = EventTerm(
-    #     func=mdp.reset_root_state_uniform,
-    #     mode="reset",
-    #     params={
-    #         "pose_range": {
-    #             "x": [-0.03, 0.03],
-    #             "y": [-0.03, 0.03],
-    #         },
-    #         "velocity_range": {},
-    #         "asset_cfg": SceneEntityCfg("apple"),
-    #     },
-    # )
+    reset_apple = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {
+                "x": [-0.1, 0.1],
+                "y": [-0.01, 0.01],
+            },
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("apple"),
+        },
+    )
 
-    # reset_mug = EventTerm(
-    #     func=mdp.reset_root_state_uniform,
-    #     mode="reset",
-    #     params={
-    #         "pose_range": {
-    #             "x": [-0.03, 0.03],
-    #             "y": [-0.03, 0.03],
-    #         },
-    #         "velocity_range": {},
-    #         "asset_cfg": SceneEntityCfg("mug"),
-    #     },
-    # )
+    reset_mug = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {
+                "x": [-0.01, 0.01],
+                "y": [-0.01, 0.01],
+            },
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("mug"),
+        },
+    )
 
 
 ##

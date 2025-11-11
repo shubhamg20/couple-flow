@@ -402,6 +402,7 @@ def full_environment_reset(env):
     # env.scene["robot"].set_joint_position_target(default_joint_pos)
     env.sim.step(render=False)
 
+
 def get_image(env) -> torch.Tensor:
     """Get image from camera - returns torch tensor (defer .cpu() until saving)."""
     rgb_data = env.scene["tiled_camera"].data.output["rgb"]
@@ -411,7 +412,6 @@ def get_image(env) -> torch.Tensor:
 def extract_trajectory_data(env, args_cli, timestep, action):
     """Extract current state for trajectory recording - keep as torch tensors."""
     if args_cli.robot == "franka":
-        ##outdated
         eef_idx = env.scene["robot"].data.body_names.index("panda_hand")
         eef_pos_w = env.scene["robot"].data.body_pos_w[0, eef_idx]
         eef_quat_w = env.scene["robot"].data.body_quat_w[0, eef_idx][[1, 2, 3, 0]]
@@ -439,7 +439,7 @@ def extract_trajectory_data(env, args_cli, timestep, action):
     img_tensor = get_image(env)
     
     objects = {}
-    object_names = ["apple", "mug", "sushi"]
+    object_names = ["sushi", "mug", "apple"]
     for obj_name in object_names:
         if obj_name in env.scene.keys():
             obj_pos = env.scene[obj_name].data.body_pos_w[0][0]
@@ -464,6 +464,7 @@ def extract_trajectory_data(env, args_cli, timestep, action):
         },
         "objects": objects
     }
+    
     return step_data
 
 def set_up_keyboard(env):
