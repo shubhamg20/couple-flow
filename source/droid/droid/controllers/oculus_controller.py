@@ -20,7 +20,7 @@ class VRPolicy:
         self,
         right_controller: bool = True,
         max_lin_vel: float = 1,
-        max_rot_vel: float = 1, # was 1
+        max_rot_vel: float = 1, 
         max_gripper_vel: float = 1,
         spatial_coeff: float = 1,
         pos_action_gain: float = 5,
@@ -106,10 +106,6 @@ class VRPolicy:
         vr_pos = self.spatial_coeff * rot_mat[:3, 3]
         vr_quat = rmat_to_quat(rot_mat[:3, :3])
         vr_gripper = self._state["buttons"]["rightTrig" if self.controller_id == "r" else "leftTrig"][0]
-        org_pos = vr_pos.copy()
-        vr_pos[0] = org_pos[0]
-        vr_pos[1] = org_pos[1]
-        vr_pos[2] = org_pos[2]
         self.vr_state = {"pos": vr_pos, "quat": vr_quat, "gripper": vr_gripper}
 
     def _limit_velocity(self, lin_vel, rot_vel, gripper_vel):

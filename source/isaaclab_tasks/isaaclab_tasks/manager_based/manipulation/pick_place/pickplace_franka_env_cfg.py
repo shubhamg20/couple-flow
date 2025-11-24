@@ -35,6 +35,20 @@ from . import mdp
 
 from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: skip
 
+############################## FOR MUG CONVEX DECOMPOSITION #####################################
+import omni.usd
+from pxr import UsdPhysics
+
+def add_collision(usd_path_load, usd_path_save):
+    # Use omni.usd instead of get_context()
+    usd_context = omni.usd.get_context()
+    stage = usd_context.open_stage(usd_path_load)
+    stage = usd_context.get_stage()
+    rigidPrim = stage.GetPrimAtPath("/World/model_normalized/mesh")
+    collisionAPI = UsdPhysics.CollisionAPI.Apply(rigidPrim)
+    collisionAPI.GetPhysicsApproximationAttr().Set(UsdPhysics.Tokens.convexDecomposition)
+    stage.Export(usd_path_save)
+#################################################################################################
 
 ##
 # Scene definition
@@ -103,12 +117,13 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     sushi = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Sushi",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]),
+        # init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.5, 1.02], rot=[-.028, -.486, -.867, .102]),
         spawn=UsdFileCfg(
             # Use the physics-enabled sushi USD created by to_usd.py
             usd_path="/workspace/isaaclab/source/gr1t2/sushi_csm/sushi.usd",
             # usd_path="/workspace/isaaclab/source/gr1t2/YCB/Axis_Aligned/011_sushi.usd",
-            scale=(.1, .1, .1),
+            scale=(.08, .08, .08),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,
                 kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
@@ -126,11 +141,12 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     apple = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Apple",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]),
+        # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.36, 1], rot=[.707, .707, 0, 0]),
         spawn=UsdFileCfg(
             # Use the physics-enabled apple USD
             usd_path="/workspace/isaaclab/usd_extracted/apple_csm/apple.usd",
-            scale=(.05, .075, .07),
+            scale=(.06, .06, .06),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,
                 kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
@@ -149,7 +165,8 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     mug = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Mug",
         # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.07, 0.35, 1.0], rot=[0, 0, 0, 1]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.37, 1.0], rot=[.0, 0.0, -.707, -.707]),
+        # init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.37, 1.0], rot=[.0, 0.0, -.707, -.707]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.5, 1.0], rot=[.0, 0.0, -.707, -.707]),
         spawn=UsdFileCfg(
             # Use the physics-enabled mug USD
             # usd_path="/workspace/isaaclab/source/gr1t2/Mugs/SM_Mug_C1.usd",
@@ -166,6 +183,14 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 max_linear_velocity=1000.0,
                 max_depenetration_velocity=5.0,
             ),
+            ############################## FOR MUG CONVEX DECOMPOSITION #####################################
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                collision_enabled=True,
+                contact_offset=0.02,
+                rest_offset=0.01,
+            ),
+            #################################################################################################
+
             # Mug mass (typical mug is around 0.25kg)
             mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
         ),
@@ -221,7 +246,7 @@ class ActionsCfg:
         body_name="panda_hand",
         controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=True, ik_method="dls"),
         scale=0.5,
-        #  body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.107]),
+        # body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.107]),
         body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.0]),
     )
     

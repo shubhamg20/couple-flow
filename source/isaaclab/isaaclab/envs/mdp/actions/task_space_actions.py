@@ -195,6 +195,7 @@ class DifferentialInverseKinematicsAction(ActionTerm):
         # obtain quantities from simulation
         ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
         # set command into controller
+
         self._ik_controller.set_command(self._processed_actions, ee_pos_curr, ee_quat_curr)
 
     def apply_actions(self):
@@ -235,7 +236,6 @@ class DifferentialInverseKinematicsAction(ActionTerm):
             ee_pose_b, ee_quat_b = math_utils.combine_frame_transforms(
                 ee_pose_b, ee_quat_b, self._offset_pos, self._offset_rot
             )
-
         return ee_pose_b, ee_quat_b
 
     def _compute_frame_jacobian(self):

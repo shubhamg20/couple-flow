@@ -25,7 +25,8 @@ parser.add_argument("--no_overlay", action="store_true", help="Disable EE trajec
 args = parser.parse_args()
 
 # Find all episode files or specific episode
-task_dir = Path(f"source/recorded_runs/{args.robot}/{args.task_name}")
+task_dir = Path(f"source/recorded_runs/{args.robot}_ood/{args.task_name}")
+output_dir = Path(f"source/recorded_runs/{args.robot}_ood/{args.task_name}/videos")
 
 if args.episode is not None:
     # Process single episode
@@ -179,6 +180,10 @@ for pkl_file in episode_files:
     print(f"  - EEF pos: {first_step['franka_eef']['pos']}")
     print(f"  - gripper: {first_step['franka_eef']['gripper']}")
 
+
+    episode_data['trajectory'] = episode_data['trajectory'][5:]
+
+
     # Detect gripper events
     gripper_events = detect_gripper_events(episode_data['trajectory'])
     print(f"\n{'='*60}")
@@ -284,7 +289,6 @@ for pkl_file in episode_files:
                     cv2.destroyAllWindows()
                 
                 if args.output_video and frames_decoded:
-                    output_dir = Path(f"source/recorded_runs/{args.robot}/{args.task_name}/videos")
                     output_dir.mkdir(parents=True, exist_ok=True)
                     video_file = output_dir / f"episode{episode_data['episode']}_replay.mp4"
                     

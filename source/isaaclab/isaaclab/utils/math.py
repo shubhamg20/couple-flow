@@ -981,16 +981,20 @@ def apply_delta_pose(
     target_pos = source_pos + delta_pose[:, 0:3]
     # interpret delta_pose[:, 3:6] as target rotation displacements
     rot_actions = delta_pose[:, 3:6]
-    angle = torch.linalg.vector_norm(rot_actions, dim=1)
-    axis = rot_actions / angle.unsqueeze(-1)
-    # change from axis-angle to quat convention
-    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(num_poses, 1)
-    rot_delta_quat = torch.where(
-        angle.unsqueeze(-1).repeat(1, 4) > eps, quat_from_angle_axis(angle, axis), identity_quat
-    )
-    # TODO: Check if this is the correct order for this multiplication.
-    target_rot = quat_mul(rot_delta_quat, source_rot)
+    # angle = torch.linalg.vector_norm(rot_actions, dim=1)
+    # axis = rot_actions / angle.unsqueeze(-1)
+    # # change from axis-angle to quat convention
+    # identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(num_poses, 1)
+    # rot_delta_quat = torch.where(
+    #     angle.unsqueeze(-1).repeat(1, 4) > eps, quat_from_angle_axis(angle, axis), identity_quat
+    # )
+    # # TODO: Check if this is the correct order for this multiplication.
 
+    # Convert source_rot (w, x, y, z) to roll, pitch, yaw
+    roll, pitch, yaw = euler_xyz_from_quat(source_rot)
+    source_rot = torch.stack([roll, pitch, yaw], dim=-1)
+    target_rot = source_rot + rot_actions
+    target_rot = quat_from_euler_xyz(target_rot[:, 0], target_rot[:, 1], target_rot[:, 2])
     return target_pos, target_rot
 
 
