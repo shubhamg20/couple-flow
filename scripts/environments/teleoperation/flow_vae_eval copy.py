@@ -19,8 +19,9 @@ import torch.nn.functional as F
 import imageio.v3 as iio
 # Flow matching imports
 from flow_policy.configs import FlowMatchingModelRunConfig
-from flow_policy.make_networks import instantiate_flow_matching_artifacts
+from flow_policy.make_networks import instantiate_vae_flow_artifacts
 from flow_policy.dataset import IsaacLabDataset
+from flow_policy.dataset import unnormalize_data
 
 parser = argparse.ArgumentParser(description="Run diffusion policy inference in Isaac Lab.")
 parser.add_argument("--robot", type=str, default="franka", choices=["franka", "gr1t2"], help="Robot type")
@@ -42,17 +43,17 @@ app_launcher_args = vars(args_cli)
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
-TRAIN_DATASET_PATH = "source/serl-flow/dataset/train_dual.pkl"  #required to extract stats
-VAL_DATASET_PATH = "source/serl-flow/dataset/train_dual.pkl"
+TRAIN_DATASET_PATH = "source/serl-flow/dataset/train_paired.pkl"
+VAL_DATASET_PATH = "source/serl-flow/dataset/train_paired.pkl"
 # VAL_DATASET_PATH = "source/serl-flow/source/serl-flow/dataset/validation.pkl"
-task_name = "dual-flow-ood-unet-new"
-epoch_num = "1000"
+task_name = "human_object_traj_cfg"
+epoch_num = "600"
 actual_action = True
-bc_policy = True # true for gaussian, false for couple flow
+bc_policy = False # true for gaussian, false for couple flow
 action_replay = False 
 state_replay = False
-latent =  None 
-# latent = "human_actions"
+# latent =  None 
+latent = "human_actions"
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
@@ -75,7 +76,6 @@ from isaaclab_tasks.utils import parse_env_cfg
 if args_cli.enable_pinocchio:
     import isaaclab_tasks.manager_based.manipulation.pick_place  # noqa: F401
 
-
 def load_model_and_config(checkpoint_path, device='cuda'):
     """
     Load trained model and configuration from checkpoint.
@@ -83,48 +83,16 @@ def load_model_and_config(checkpoint_path, device='cuda'):
     print(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
-    # Extract config from checkpoint
     cfg = checkpoint['config']
+    cfg.dataset.val_dataset_path = VAL_DATASET_PATH
+    cfg.dataset.dataset_path = TRAIN_DATASET_PATH
+    cfg.with_image = True
     print(f"Loaded config from checkpoint")
-    
-    # Initialize flow matching artifacts (model only)
-    nets, device = instantiate_flow_matching_artifacts(cfg, model_only=True)
-    
-    # Load validation dataset for normalization stats
-    val_dataset = IsaacLabDataset(
-        dataset_path=VAL_DATASET_PATH,
-        with_image=True,
-        pred_horizon=cfg.pred_horizon,
-        obs_horizon=cfg.obs_horizon,
-        action_horizon=cfg.action_horizon,
-        num_trajectories=cfg.dataset.num_traj,
-    )
-    train_dataset = IsaacLabDataset(
-        dataset_path=TRAIN_DATASET_PATH,
-        with_image=True,
-        pred_horizon=cfg.pred_horizon,
-        obs_horizon=cfg.obs_horizon,
-        action_horizon=cfg.action_horizon,
-        num_trajectories=cfg.dataset.num_traj,
-    )
-    state_dict = checkpoint['state_dict']
-    # Check if keys have 'flow_net.' prefix and remove it if necessary
-    if any(key.startswith('flow_net.') for key in state_dict.keys()):
-        print("Removing 'flow_net.' prefix from checkpoint keys")
-        new_state_dict = {}
-        for key, value in state_dict.items():
-            if key.startswith('flow_net.'):
-                new_key = key.replace('flow_net.', '')
-                new_state_dict[new_key] = value
-            else:
-                new_state_dict[key] = value
-        state_dict = new_state_dict
-    nets['flow_net'].load_state_dict(state_dict)
+    nets, ema, optimizers, schedulers, dataloader, val_dataloader, dataset, val_dataset, stats, device = instantiate_vae_flow_artifacts(cfg)
+    nets['robot_vae'].load_state_dict(checkpoint['robot_vae'])
+    nets['flow_net'].load_state_dict(checkpoint['flow_net'])
     nets.eval()
-    
-    # Create normalization helper
-    norm_stats = train_dataset.stats
-    
+    norm_stats = stats
     print(f"Model loaded successfully. Best validation loss: {checkpoint.get('best_val_loss', 'N/A')}")
     print(f"Training epoch: {checkpoint.get('epoch', 'N/A')}")
     print(f"Pred horizon: {cfg.pred_horizon}, Obs horizon: {cfg.obs_horizon}, Action horizon: {cfg.action_horizon}")
@@ -224,7 +192,7 @@ def draw_trajectory_on_frame(img, all_projections, current_idx, is_eef=False):
                 u_prev, v_prev = all_projections[i-1]
                 cv2.line(img, (u_prev, v_prev), (u, v), (0, 255, 0), 1)
 
-            twenty_percent_idx = int(0. * len(all_projections))
+            twenty_percent_idx = int(.0 * len(all_projections))
             if is_eef and i >= twenty_percent_idx:
                 # Draw red X at 20% timestep mark
                 if twenty_percent_idx < len(all_projections) and all_projections[twenty_percent_idx] is not None:
@@ -314,7 +282,8 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
     if episode_idx > 0: start_idx = dataset.episode_ends[episode_idx - 1]
 
     apply_demo_objects(env, dataset.train_data["blocks_init_dict"][episode_idx], env_ids)
-    #For visualization / evaluation
+    #For visualization / evalua
+    # tion
     gt_robot_data = {
         "images" : dataset.train_data['gt_robot_images'][start_idx:end_idx],
         "eef_poses" : dataset.train_data['state'][start_idx:end_idx][:,:3],
@@ -343,6 +312,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             trajectory_data['camera_params'] = get_camera_parameters(env, "tiled_camera")
         
         gt_states = torch.tensor(dataset.normalized_train_data['state'][start_idx:end_idx]).to(device)
+        n = human_data['eef_poses'].shape[0]
         max_steps = len(gt_states) 
         
         
@@ -353,10 +323,10 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             latent_variable =  dataset.train_data['human_action'][start_idx:end_idx]
         
         
-        # current_obs = gt_states[0]
-        current_obs = get_observation_from_env(env, episode_ends, latent_variable)
-        # current_obs[6] = .04
-        # first_obs = current_obs.clone()
+        current_obs = gt_states[0]
+        # current_obs = get_observation_from_env(env, episode_ends, latent_variable)
+        current_obs[6] = .04
+        first_obs = current_obs.clone()
 
         obs_history = deque(maxlen=obs_horizon)
         for _ in range(obs_horizon):
@@ -375,7 +345,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
         image = get_image(env)
         prev_gripper = 1.0
         # for step_idx in tqdm(range(int(max_steps))):
-        for step_idx in tqdm(range(int(len(gt_states)))):
+        for step_idx in tqdm(range(n)):
             if terminated or truncated:
                 break
 
@@ -398,36 +368,56 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
 
             if not bc_policy:
                 if not torch.all(human_action_chunk == -1):
-                    if human_action_chunk.shape[-1] < action_dim:
-                        diff_dims = action_dim - human_action_chunk.shape[-1]
-                        noise = torch.randn(*human_action_chunk.shape[:-1], diff_dims, device=device)
-                        print("using human action with noise")
-                        x = torch.cat([human_action_chunk[:, :3], noise, human_action_chunk[:, 3:]], dim=-1)
-                        x = x.unsqueeze(0)
-                    else:
-                        x = human_action_chunk.unsqueeze(0)
+                    _, x, _ = nets['human_vae'].encode(human_action_chunk.unsqueeze(0), current_obs.unsqueeze(0))  # [1, latent_dim]
+                    print("using human action encoding:", x.shape)
+                    # if human_action_chunk.shape[-1] < action_dim:
+                    #     if np.random.rand() <= 1.0:
+                    #         diff_dims = action_dim - human_action_chunk.shape[-1]
+                    #         noise = torch.randn(*human_action_chunk.shape[:-1], diff_dims, device=device)
+                    #         print("using human action with noise")
+                    #         x = torch.cat([human_action_chunk[:, :3], noise, human_action_chunk[:, 3:]], dim=-1)
+                    #         x = x.unsqueeze(0)
+                    #     else:
+                    #         x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
+                    # else:
+                    #     x = human_action_chunk.unsqueeze(0)
+
                 else:
                     x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)   
                 
             else:
-                x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
+                x = torch.randn(1, 16, device=device).unsqueeze(0)
 
-            _t = 0 # 0.2-0.8
-            x = x#torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
-
+            # _t = .0
+            # x = x*_t + (1-_t)*torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0) 6
+            # _t = .0 # 0.2-0.8
+            # x = torch.randn(1, cfg.latent_dim, device=device).unsqueeze(0)
+            _, l_cond, _ = nets['human_vae'].encode(human_action_chunk.unsqueeze(0), current_obs.unsqueeze(0)) 
+            # cond_obs = torch.cat([current_obs, l_cond.flatten()], dim=-1)
+            uncond_obs = torch.cat([current_obs, torch.zeros_like(l_cond).flatten()], dim=-1)
             # Flow matching inference
-            num_steps = 100
+            num_steps = 50
             dt = 1.0 / num_steps
             # for fm_step in range(num_steps):
             for fm_step in range(int((.0)*num_steps), num_steps):
                 t = torch.tensor(fm_step * dt, device=device)
                 t_batch = t.unsqueeze(0)
                 vt = nets['flow_net'](x, t_batch, global_cond=obs_cond)
+                # v_cond = nets['flow_net'](
+                #     x, t_batch, global_cond=cond_obs.unsqueeze(0)
+                # )
+
+                # v_uncond = nets['flow_net'](
+                #     x, t_batch, global_cond=uncond_obs.unsqueeze(0)
+                # )
+                # vt = v_uncond + 2.0 * (v_cond - v_uncond)
+
                 x = x + dt * vt
 
-            predicted_chunk = x.squeeze(0)[:8]  # [pred_horizon, action_dim]
-            
+            z = x.squeeze(0)  # [1, latent_dim] -> [latent_dim]
             # Add predicted actions to the queue for their corresponding timesteps
+            predicted_chunk = nets['robot_vae'].generate_from_latent(z, current_obs.unsqueeze(0)).squeeze(0)
+            predicted_chunk = predicted_chunk[:4]
             for act_t, act in enumerate(predicted_chunk):
                 target_step = step_idx + act_t
                 if target_step < max_steps:
@@ -436,6 +426,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                     actions_queue[target_step].append(act)
             
             action = torch.stack(actions_queue[step_idx], dim=0).mean(dim=0)
+            # action = unnormalize_data(action, norm_stats['action'], device)
             # Clean up used actions
             del actions_queue[step_idx]
             
@@ -490,7 +481,8 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             
             # Get new observation
             if state_replay: current_obs = gt_states[step_idx]
-            else: current_obs = get_observation_from_env(env, episode_ends, latent_variable)
+            else: 
+                current_obs = get_observation_from_env(env, episode_ends, latent_variable)
             # current_obs[6] = 0.0
             obs_history.append(current_obs)
 
@@ -734,16 +726,17 @@ def main():
     total_episodes = len(val_dataset.episode_ends)
 
     # episode_indices = np.array([i for i in range(30)] + [i for i in range(61, 90)])
-    episode_indices = np.array([i for i in range(total_episodes)] )
-    # episode_indices = np.array([8,39,40,53,64,90,95,98,103,110])
-    #################################################################################
+    # episode_indices = np.array([i for i in range(total_episodes)] )
+    episode_indices = np.array([0,4,11,12,13,17,20,21,22,23])
+    episode_indices = np.array([8,39,40,53,64,90,95,98,103,110])
+    ##################################################################################
     # This is the episode which the states I manually set above guarantee with state
     # replay the robot will successfully pick and place the mug.
     # episode_indices = np.array([20])
     ##################################################################################
     # episode_indices = np.array([0])
     # import pdb; pdb.set_trace()
-    np.random.shuffle(episode_indices)
+    # np.random.shuffle(episode_indices)
     for idx, episode_idx in enumerate(episode_indices):
         # if episode_idx == 23: continue
         if not simulation_app.is_running():

@@ -25,3 +25,6 @@ recordings/
 _isaac_sim?
 # Docker history
 docker/.isaac-lab-docker-history
+# checkpoints
+source/serl-flow/chkpts
+*.pt
