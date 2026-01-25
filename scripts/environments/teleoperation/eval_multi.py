@@ -34,6 +34,12 @@ parser.add_argument(
     default=False,
     help="Enable Pinocchio.",
 )
+parser.add_argument(
+    "--num_envs",
+    type=int,
+    default=1,
+    help="Number of parallel environments to run (multi-env inference)",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.task = "Isaac-PickPlace-Franka-custom"
@@ -384,8 +390,8 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
         image = get_image(env)
         prev_gripper = 1.0
         # for step_idx in tqdm(range(int(max_steps))):
-        # for step_idx in tqdm(range(int(len(gt_states)))):
-        for step_idx in tqdm(range(30)):
+        for step_idx in tqdm(range(int(len(gt_states)))):
+        # for step_idx in tqdm(range(40)):
 
             if terminated or truncated:
                 break
@@ -503,7 +509,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                     print("current obs:", current_obs[:7])
                 obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0)) 
             image = get_image(env)
-            object_poses = get_object_poses_from_env(env)
+            object_poses = get_object_poses_from_env(env);
             
             # Get new observation
             if state_replay: current_obs = gt_states[step_idx]
@@ -717,27 +723,23 @@ def main():
         traceback.print_exc()
         simulation_app.close()
         return
-    
-    # Create environment
     try:
-        env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
+        env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
         env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
-        env.reset()
+        obs, _ = env.reset()
     except Exception as e:
         omni.log.error(f"Failed to create environment: {e}")
         import traceback
         traceback.print_exc()
         simulation_app.close()
         return
-    
+    # NOTE: The rest of the code (run_diffusion_policy, etc.) is currently written for single-env. To fully support multi-env inference, you must refactor run_diffusion_policy and all per-step logic to handle batched observations, actions, and episode management for each environment in parallel.
     # Create pose marker for EEF visualization
     frame_marker_cfg = FRAME_MARKER_CFG.copy()
     frame_marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
     pose_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/policy_eef"))
-    
     # Set camera view
     env.sim.set_camera_view(eye=(0.6, -0.3, 1.5), target=(-1.3, 2.3, 0.0))
-    
     print(f"\n{'='*60}")
     print(f"DIFFUSION POLICY INFERENCE")
     print(f"Model: {args_cli.checkpoint}")
@@ -747,59 +749,119 @@ def main():
     if args_cli.save_trajectories:
         print(f"Saving trajectories to: {args_cli.output_dir}")
     print(f"{'='*60}\n")
-    
-    # Run episodes
+    # Multi-env inference logic
     import random
-    # random.seed(42)  # Ensures reproducibility
     total_episodes = len(val_dataset.episode_ends)
-
-    # episode_indices = np.array([i for i in range(30)] + [i for i in range(61, 90)])
-    episode_indices = np.array([i for i in range(total_episodes)] )
-    episode_indices = np.array([4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4])+2
-    #################################################################################
-    # This is the episode which the states I manually set above guarantee with state
-    # replay the robot will successfully pick and place the mug.
-    # episode_indices = np.array([20])
-    ##################################################################################
-    # episode_indices = np.array([0])
-    # import pdb; pdb.set_trace()
+    episode_indices = np.arange(total_episodes)
     np.random.shuffle(episode_indices)
-    for idx, episode_idx in enumerate(episode_indices):
-        # if episode_idx == 23: continue
-        if not simulation_app.is_running():
+    num_envs = args_cli.num_envs
+    active_episodes = [None] * num_envs
+    episode_ptr = 0
+    finished_episodes = 0
+    # Assign initial episodes to each env
+    for i in range(num_envs):
+        if episode_ptr < len(episode_indices):
+            active_episodes[i] = episode_indices[episode_ptr]
+            episode_ptr += 1
+    # Per-env state
+    obs_histories = [deque(maxlen=cfg.obs_horizon) for _ in range(num_envs)]
+    actions_queues = [{} for _ in range(num_envs)]
+    gt_states_list = [None] * num_envs
+    max_steps_list = [0] * num_envs
+    step_idxs = [0] * num_envs
+    terminated = [False] * num_envs
+    truncated = [False] * num_envs
+    # Prepare per-env episode data
+    for env_id in range(num_envs):
+        episode_idx = active_episodes[env_id]
+        if episode_idx is not None:
+            end_idx = val_dataset.episode_ends[episode_idx]
+            start_idx = 0
+            if episode_idx > 0:
+                start_idx = val_dataset.episode_ends[episode_idx - 1]
+            gt_states = torch.tensor(val_dataset.normalized_train_data['state'][start_idx:end_idx]).to(device)
+            gt_states_list[env_id] = gt_states
+            max_steps_list[env_id] = len(gt_states)
+            current_obs = gt_states[0]
+            current_obs[6] = .04
+            for _ in range(cfg.obs_horizon):
+                obs_histories[env_id].append(current_obs)
+    # Main batched step loop
+    while finished_episodes < total_episodes:
+        # Collect obs_cond for all active envs
+        obs_cond_batch = []
+        valid_env_ids = []
+        for env_id in range(num_envs):
+            if active_episodes[env_id] is None or terminated[env_id] or truncated[env_id]:
+                continue
+            obs_stack = torch.stack(list(obs_histories[env_id]), dim=0)
+            obs_cond = obs_stack.flatten()
+            obs_cond_batch.append(obs_cond)
+            valid_env_ids.append(env_id)
+        if len(obs_cond_batch) == 0:
             break
-
-        print(f"\n{'='*60}")
-        print(f"Episode {idx + 1}/{total_episodes} (dataset episode {episode_idx})")
-        print(f"{'='*60}\n")
-
-        try:
-            pred_data, gt_robot_data, human_data  = run_diffusion_policy(
-                env=env,
-                dataset=val_dataset,
-                episode_idx=episode_idx,
-                nets=nets,
-                norm_stats=norm_stats,
-                cfg=cfg,
-                num_steps=args_cli.num_steps,
-                max_episode_length=args_cli.max_episode_length,
-                device=device,
-                pose_marker=pose_marker,
-                save_trajectory=args_cli.save_trajectories
-            )
-
-            # Save trajectory if requested
-            if args_cli.save_trajectories and pred_data is not None:
-                save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, args_cli.output_dir)
-
-            print(f"\nEpisode {idx + 1} (dataset episode {episode_idx}) completed:")
-
-        except Exception as e:
-            omni.log.error(f"Error in episode {idx + 1} (dataset episode {episode_idx}): {e}")
-            import traceback
-            traceback.print_exc()
-            break
-    
+        obs_cond_batch = torch.stack(obs_cond_batch, dim=0)  # [num_active_envs, obs_dim]
+        # Prepare batched human_action_chunk
+        pred_horizon = cfg.pred_horizon
+        action_dim = 7
+        human_action_chunks = []
+        for idx, env_id in enumerate(valid_env_ids):
+            episode_idx = active_episodes[env_id]
+            start_idx = 0
+            if episode_idx > 0:
+                start_idx = val_dataset.episode_ends[episode_idx - 1]
+            step_idx = step_idxs[env_id]
+            chunk = torch.from_numpy(
+                val_dataset.normalized_train_data['human_action'][start_idx+step_idx:start_idx+step_idx + pred_horizon]
+            ).to(device)
+            if chunk.shape[0] < pred_horizon:
+                padding = torch.zeros(pred_horizon - chunk.shape[0], chunk.shape[1], device=device)
+                chunk = torch.cat([chunk, padding], dim=0)
+            human_action_chunks.append(chunk)
+        human_action_chunks = torch.stack(human_action_chunks, dim=0)  # [num_active_envs, pred_horizon, action_dim]
+        # Batched x init
+        noise_scale = 1.0
+        x = noise_scale * torch.randn(human_action_chunks.shape[0], pred_horizon, action_dim, device=device)
+        # Batched flow matching inference
+        num_steps = 50
+        dt = 1.0 / num_steps
+        for fm_step in range(num_steps):
+            t = torch.tensor(fm_step * dt, device=device)
+            t_batch = t.repeat(x.shape[0])  # [num_active_envs]
+            vt = nets['flow_net'](x, t_batch, global_cond=obs_cond_batch)
+            x = x + dt * vt
+        predicted_chunks = x[:, :8, :]  # [num_active_envs, pred_horizon, action_dim]
+        # Use first action for each env
+        actions = [torch.zeros(7, device=device) for _ in range(num_envs)]
+        for i, env_id in enumerate(valid_env_ids):
+            actions[env_id] = predicted_chunks[i, 0].detach().cpu()
+        actions_tensor = torch.stack(actions, dim=0)
+        _ = env.step(actions_tensor)
+        # Update per-env state
+        for env_id in range(num_envs):
+            if active_episodes[env_id] is None or terminated[env_id] or truncated[env_id]:
+                continue
+            step_idxs[env_id] += 1
+            if step_idxs[env_id] >= max_steps_list[env_id]:
+                finished_episodes += 1
+                if episode_ptr < len(episode_indices):
+                    # Assign new episode
+                    new_ep = episode_indices[episode_ptr]
+                    active_episodes[env_id] = new_ep
+                    episode_ptr += 1
+                    end_idx = val_dataset.episode_ends[new_ep]
+                    start_idx = 0
+                    if new_ep > 0:
+                        start_idx = val_dataset.episode_ends[new_ep - 1]
+                    gt_states = torch.tensor(val_dataset.normalized_train_data['state'][start_idx:end_idx]).to(device)
+                    gt_states_list[env_id] = gt_states
+                    max_steps_list[env_id] = len(gt_states)
+                    step_idxs[env_id] = 0
+                    obs_histories[env_id].clear()
+                    for _ in range(cfg.obs_horizon):
+                        obs_histories[env_id].append(gt_states[0])
+                else:
+                    active_episodes[env_id] = None
     env.close()
     print("Inference finished")
 

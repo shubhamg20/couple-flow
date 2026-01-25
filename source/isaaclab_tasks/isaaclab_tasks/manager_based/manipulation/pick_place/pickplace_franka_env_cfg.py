@@ -348,19 +348,19 @@ class EventCfg:
         },
     )
 
-    reset_objects = EventTerm(func=mdp.swap_objects, mode="reset",
-                              params={
-                                  "pose_ranges": {
-                                      "x": [-0.03, 0.03],
-                                      "y": [-0.04, 0.01],
-                                  },
-                                  "asset_cfgs": [
-                                      SceneEntityCfg("sushi"),
-                                      SceneEntityCfg("apple"),
-                                      SceneEntityCfg("mug"),
-                                  ]
-                              })
-    # reset_sushi = EventTerm(
+    # reset_objects = EventTerm(func=mdp.swap_objects, mode="reset",
+    #                           params={
+    #                               "pose_ranges": {
+    #                                   "x": [-0.03, 0.03],
+    #                                   "y": [-0.04, 0.01],
+    #                               },
+    #                               "asset_cfgs": [
+    #                                   SceneEntityCfg("sushi"),
+    #                                   SceneEntityCfg("apple"),
+    #                                   SceneEntityCfg("mug"),
+    #                               ]
+    #                           })
+    # # reset_sushi = EventTerm(
     #     func=mdp.reset_root_state_uniform,
     #     mode="reset",
     #     params={

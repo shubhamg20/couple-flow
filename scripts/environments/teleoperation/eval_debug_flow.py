@@ -18,9 +18,9 @@ from tqdm import tqdm
 import torch.nn.functional as F
 import imageio.v3 as iio
 # Flow matching imports
-from flow_policy.configs import FlowMatchingModelRunConfig
-from flow_policy.make_networks import instantiate_flow_matching_artifacts
-from flow_policy.dataset import IsaacLabDataset, unnormalize_data
+from flow_policy.configs_dsrl import FlowMatchingModelRunConfig
+from flow_policy.make_networks import instantiate_flow_dsrl_flow_artifacts
+from flow_policy.dataset_dsrl import IsaacLabDataset, unnormalize_data
 
 parser = argparse.ArgumentParser(description="Run diffusion policy inference in Isaac Lab.")
 parser.add_argument("--robot", type=str, default="franka", choices=["franka", "gr1t2"], help="Robot type")
@@ -42,12 +42,12 @@ app_launcher_args = vars(args_cli)
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
-TRAIN_DATASET_PATH = "source/serl-flow/dataset/train_paired.pkl"  #required to extract stats
-VAL_DATASET_PATH = "source/serl-flow/dataset/validation_paired.pkl"
-# VAL_DATASET_PATH = "source/serl-flow/source/serl-flow/dataset/validation.pkl"
-task_name = "flow-mixed"
-# task_name = "flow-mixed3"
-epoch_num = "1250"
+TRAIN_DATASET_PATH = "source/serl-flow/dataset/train_mixed.pkl"  #required to extract stats
+VAL_DATASET_PATH = "source/serl-flow/dataset/train_paired.pkl"
+# task_name = "steering-flow-mixed"
+task_name = "dsrl-flow-flow-00"
+epoch_num = "3500"
+HOT_START_STEP = 0.00
 actual_action = True
 bc_policy = True # true for gaussian, false for couple flow
 action_replay = False 
@@ -89,7 +89,7 @@ def load_model_and_config(checkpoint_path, device='cuda'):
     print(f"Loaded config from checkpoint")
     
     # Initialize flow matching artifacts (model only)
-    nets, device = instantiate_flow_matching_artifacts(cfg, model_only=True)
+    nets, device = instantiate_flow_dsrl_flow_artifacts(cfg, model_only=True)
     
     # Load validation dataset for normalization stats
     
@@ -110,19 +110,43 @@ def load_model_and_config(checkpoint_path, device='cuda'):
         num_trajectories=cfg.dataset.num_traj,
         stats = train_dataset.stats
     )
-    state_dict = checkpoint['state_dict']
-    # Check if keys have 'flow_net.' prefix and remove it if necessary
-    if any(key.startswith('flow_net.') for key in state_dict.keys()):
-        print("Removing 'flow_net.' prefix from checkpoint keys")
-        new_state_dict = {}
+    # Load the checkpoint state dict
+    try:
+        # Try to load the entire ModuleDict first
+        nets.load_state_dict(checkpoint['state_dict'])
+        print(f"Successfully loaded full ModuleDict state dict")
+    except Exception as e:
+        print(f"Failed to load full state dict: {e}")
+        print("Attempting to load individual network weights...")
+        
+        # Fallback: separate flow_net and noise_net weights
+        state_dict = checkpoint['state_dict']
+        flow_state_dict = {}
+        noise_state_dict = {}
+        
         for key, value in state_dict.items():
             if key.startswith('flow_net.'):
-                new_key = key.replace('flow_net.', '')
-                new_state_dict[new_key] = value
-            else:
-                new_state_dict[key] = value
-        state_dict = new_state_dict
-    nets['flow_net'].load_state_dict(state_dict)
+                flow_state_dict[key.replace('flow_net.', '')] = value
+            elif key.startswith('noise_net.'):
+                noise_state_dict[key.replace('noise_net.', '')] = value
+                
+        # Load weights individually
+        if len(flow_state_dict) > 0:
+            print(f"Loading flow_net weights ({len(flow_state_dict)} keys)")
+            nets['flow_net'].load_state_dict(flow_state_dict)
+        
+        if 'noise_net' in nets and len(noise_state_dict) > 0:
+            print(f"Loading noise_net weights ({len(noise_state_dict)} keys)")
+            nets['noise_net'].load_state_dict(noise_state_dict)
+
+        # flow_state_dict = {}
+        # checkpoint = torch.load("source/serl-flow/chkpts/dsrl-flow-mixed/epoch_600.pt", map_location=device, weights_only=False)
+        # state_dict = checkpoint['state_dict']
+        # for key, value in state_dict.items():
+        #     if key.startswith('flow_net.'):
+        #         flow_state_dict[key.replace('flow_net.', '')] = value
+        # nets['flow_net'].load_state_dict(flow_state_dict)
+        
     nets.eval()
     
     # Create normalization helper
@@ -172,7 +196,7 @@ def get_observation_from_env(env, episodes_ends, ep_latent_positions):
         object_positions[:]
         # object_positions
     ], dim=0)
-    # if ep_latent_positions is not None: obs = add_latent_positions(obs, ep_latent_positions, env.device)
+    if ep_latent_positions is not None: obs = add_latent_positions(obs, ep_latent_positions, env.device)
     return obs
 
 def add_latent_positions(obs, ep_latent_positions, device, window_len=150):
@@ -297,6 +321,40 @@ def apply_demo_objects(env, demo_objects, env_ids):
             tray_asset.write_root_pose_to_sim(root_pose, env_ids=env_ids)
             tray_asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)
 
+def inv_flow_simple(flow_net, x1, cond, steps=100):
+    """
+    Invert flow (Data -> Hot-Start Point) using Implicit Fixed Point solver.
+    Modified to stop at HOT_START_STEP (t=0.9) instead of going to 0.
+    """
+    batch_size = x1.shape[0]
+    curr_x = x1.clone()
+    dt = 1.0 / steps
+
+    for i in range(steps, int(HOT_START_STEP*steps), -1):
+        
+        t_val = i / steps
+        t = torch.full((batch_size,), t_val, device=x1.device)
+    
+        v = flow_net(curr_x, t, global_cond=cond)
+        curr_x = curr_x - v * dt
+
+    return curr_x
+
+def forward_flow(flow_net, x0, cond, steps=50):
+    """Integrate flow network from x0 (t=0) to x1 (t=1)"""
+    batch_size = x0.shape[0]
+    curr_x = x0.clone()
+    dt = 1.0 / steps
+
+    for i in range(steps):
+        t_val = i / steps
+        t = torch.full((batch_size,), t_val, device=x0.device)
+    
+        v = flow_net(curr_x, t, global_cond=cond)
+        curr_x = curr_x + v * dt
+
+    return curr_x
+
 def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_steps, max_episode_length, device, 
                          pose_marker=None, save_trajectory=False, bc_policy=bc_policy):
 
@@ -315,9 +373,6 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
     if episode_idx > 0: start_idx = dataset.episode_ends[episode_idx - 1]
 
     apply_demo_objects(env, dataset.train_data["blocks_init_dict"][episode_idx], env_ids)
-    
-    # Let physics settle
-    sleep(2.0)
     #For visualization / evaluation
     gt_robot_data = {
         "images" : dataset.train_data['gt_robot_images'][start_idx:end_idx],
@@ -346,13 +401,6 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             }
             trajectory_data['camera_params'] = get_camera_parameters(env, "tiled_camera")
         
-        # Initialize gripper to open position
-        open_action = torch.zeros(7, device=device)
-        open_action[-1] = 1.0  # Open gripper command
-        for _ in range(20):
-            _ = env.step(open_action.unsqueeze(0))
-            # image = get_image(env)
-            # trajectory_data['images'].append(image.cpu().numpy())
         gt_states = torch.tensor(dataset.normalized_train_data['state'][start_idx:end_idx]).to(device)
         max_steps = len(gt_states) 
         
@@ -363,9 +411,12 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             # latent_variable =  human_data["object_poses"]
             latent_variable =  dataset.train_data['human_action'][start_idx:end_idx]
         
-        
-        current_obs = gt_states[0]
-        # current_obs = get_observation_from_env(env, episode_ends, latent_variable)
+        for _ in range(10):
+            _action = torch.zeros(7, device=device)
+            _action[-1] = 1.0
+            env.step(_action.unsqueeze(0))
+        # current_obs = gt_states[0]
+        current_obs = get_observation_from_env(env, episode_ends, latent_variable)
         current_obs[6] = .04
         # first_obs = current_obs.clone()
 
@@ -378,15 +429,13 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
         
         terminated = False
         truncated = False
-        action_dim = 7 
         
-        # Get initial image and set up for main loop
         image = get_image(env)
         prev_gripper = 1.0
         # for step_idx in tqdm(range(int(max_steps))):
-        # for step_idx in tqdm(range(int(len(gt_states)))):
-        for step_idx in tqdm(range(30)):
-
+        preds = []
+        gts = []
+        for step_idx in tqdm(range(int(len(gt_states)))):
             if terminated or truncated:
                 break
 
@@ -402,41 +451,50 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                 dataset.normalized_train_data['action'][start_idx+step_idx:start_idx+step_idx + pred_horizon]
             ).to(device)
             # Pad to match full action dimension and pred_horizon
-            if human_action_chunk.shape[0] < pred_horizon:
-                padding = torch.zeros(pred_horizon - human_action_chunk.shape[0], 
-                                    human_action_chunk.shape[1], device=device)
-                human_action_chunk = torch.cat([human_action_chunk, padding], dim=0)
-
-            if not bc_policy:
-                if not torch.all(human_action_chunk == -1):
-                    if human_action_chunk.shape[-1] < action_dim:
-                        diff_dims = action_dim - human_action_chunk.shape[-1]
-                        noise = torch.randn(*human_action_chunk.shape[:-1], diff_dims, device=device)
-                        print("using human action with noise")
-                        x = torch.cat([human_action_chunk[:, :3], noise, human_action_chunk[:, 3:]], dim=-1)
-                        x = x.unsqueeze(0)
-                    else:
-                        x = human_action_chunk.unsqueeze(0)
-                else:
-                    x =  torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)   
+            # if human_action_chunk.shape[0] < pred_horizon:
+            #     padding = torch.zeros(pred_horizon - human_action_chunk.shape[0], 
+            #                         human_action_chunk.shape[1], device=device)
+            #     human_action_chunk = torch.cat([human_action_chunk, padding], dim=0)
+            # action_dim = 7
+            # if not bc_policy:
+            #     if not torch.all(human_action_chunk == -1):
+            #         if human_action_chunk.shape[-1] < action_dim:
+            #             diff_dims = action_dim - human_action_chunk.shape[-1]
+            #             noise = torch.randn(*human_action_chunk.shape[:-1], diff_dims, device=device)
+            #             print("using human action with noise")
+            #             x = torch.cat([human_action_chunk[:, :3], noise, human_action_chunk[:, 3:]], dim=-1)
+            #             x = x.unsqueeze(0)
+            #         else:
+            #             x = human_action_chunk.unsqueeze(0)
+            #     else:
+            #         x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)   
                 
-            else:
-                # Add more diversity to noise initialization
-                noise_scale = 1.0  # Increase noise scale for more diversity
-                x = noise_scale * torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
+            # else:
+            #     x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
 
-            _t = 0 # 0.2-0.8
+            # _t = 0 # 0.2-0.8
+            # x = x
 
-            x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
 
+            human_context = dataset.normalized_train_data['human_context'][start_idx]
+            # import pdb; pdb.set_trace()
+            human_context = torch.from_numpy(human_context).to(device)
+            noise_net_input = torch.cat([obs_cond, human_context.unsqueeze(0)], dim=-1)
+            x0_noise = torch.randn((1,pred_horizon,7)).to(device)
+            # x = torch.randn(human_action_chunk.shape[0], 7, device=device).unsqueeze(0)
+            x = forward_flow(nets['noise_net'], x0_noise, noise_net_input, steps=50)
+            x_pred = x.clone().squeeze(0)[0]
+            preds.append(x_pred.cpu().numpy())
+            x_gt = inv_flow_simple(nets["flow_net"], gt_action_chunk.unsqueeze(0), obs_cond, steps=50)[0]
+            gts.append(x_gt[0].cpu().numpy())
             # Flow matching inference
             num_steps = 50
             dt = 1.0 / num_steps
             # for fm_step in range(num_steps):
-            for fm_step in range(int((.0)*num_steps), num_steps):
+            # for fm_step in range(int((.0)*num_steps), num_steps):
+            for fm_step in range(int(HOT_START_STEP*num_steps), num_steps):
                 t = torch.tensor(fm_step * dt, device=device)
                 t_batch = t.unsqueeze(0)
-                # Use observation conditioning as the model was trained
                 vt = nets['flow_net'](x, t_batch, global_cond=obs_cond)
                 x = x + dt * vt
 
@@ -457,8 +515,8 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             if action_replay:
                 action = gt_action_chunk[0]  
             action = action.detach().cpu()
-            # action = unnormalize_data(action, stats=norm_stats['action'])  # Actions are already normalized from flow network
-            print(action)
+            # action = unnormalize_data(action, stats=norm_stats['action'])
+            # print(action)
             print("action:", action[-1])
             # Track gripper state change and hold for 2 seconds (assuming 30Hz, ~60 steps)
             if not hasattr(run_diffusion_policy, "gripper_hold_counter"):
@@ -470,11 +528,11 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                 run_diffusion_policy.gripper_hold_counter = 60  # Hold for 2 seconds
                 run_diffusion_policy.last_gripper_value = action[-1]
 
-            # if action[-1] < .1:
+            # if action[-1] <= .5:
             #     action[-1] = -.01  # close
-                # prev_gripper = action[-1]
-                # run_diffusion_policy.last_gripper_value = action[-1]
-            # elif action[-1] > .2 :
+            #     prev_gripper = action[-1]
+            #     run_diffusion_policy.last_gripper_value = action[-1]
+            # elif action[-1] > .5 :
             #     action[-1] = 1.0  # open
             #     prev_gripper = action[-1]
             #     run_diffusion_policy.last_gripper_value = action[-1]
@@ -508,9 +566,9 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             # Get new observation
             if state_replay: current_obs = gt_states[step_idx]
             else: current_obs = get_observation_from_env(env, episode_ends, latent_variable)
+            # current_obs[6] = 0.0
             # if step_idx < 5:
             #     current_obs[6] = .04
-            # current_obs[6] = 0.0
             obs_history.append(current_obs)
 
             # Record trajectory
@@ -523,9 +581,54 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                     'pos': current_obs[:3].cpu().numpy(),
                     'rpy': current_obs[3:6].cpu().numpy()
                 })
+        plot_preds_gts(gts, preds, episode_idx, args_cli.output_dir)
     
     print(f"✅ Trajectory completed: {len(trajectory_data['actions']) if save_trajectory else step_idx} steps")
     return trajectory_data, gt_robot_data, human_data if save_trajectory else None
+
+import matplotlib.pyplot as plt
+def plot_preds_gts(x0_inverted_list, x0_pred_list, episode_idx, output_dir):
+    """Plot noise space distributions for different trajectories in different colors - comparing inverted flow vs noise net predictions"""
+    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
+    mkdirs = Path(output_dir) / task_name / epoch_num
+    mkdirs.mkdir(parents=True, exist_ok=True)
+    save_path = Path(output_dir) / task_name / epoch_num / f"trajectory_{episode_idx:03d}_comparison.png"
+    fig = plt.figure(figsize=(20, 8))
+    # Convert lists to numpy arrays
+    x0_inverted_array = np.vstack(x0_inverted_list)
+    x0_pred_array = np.vstack(x0_pred_list)
+    # Plot 1: Inverted Flow Results
+    ax1 = fig.add_subplot(121, projection='3d')
+    color = colors[0]
+    ax1.scatter(x0_inverted_array[:, 0], x0_inverted_array[:, 1], x0_inverted_array[:, 2], 
+                c=color, alpha=0.7, s=40, label='Inverted Flow GT')
+    
+    ax1.set_xlabel('Noise Dim 0')
+    ax1.set_ylabel('Noise Dim 1') 
+    ax1.set_zlabel('Noise Dim 2')
+    ax1.set_title('Inverted Flow (Ground Truth)', fontsize=14)
+    ax1.legend()
+    
+    # Plot 2: Noise Network Predictions
+    ax2 = fig.add_subplot(122, projection='3d')
+    color = colors[1]
+    ax2.scatter(x0_pred_array[:, 0], x0_pred_array[:, 1], x0_pred_array[:, 2], 
+                c=color, alpha=0.7, s=40, label='Noise Net Pred')
+    
+    ax2.set_xlabel('Noise Dim 0')
+    ax2.set_ylabel('Noise Dim 1') 
+    ax2.set_zlabel('Noise Dim 2')
+    ax2.set_title('Noise Network Predictions', fontsize=14)
+    ax2.legend()
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved comparison plot to: {save_path}")
+    plt.close()  # Remove plt.show() since this is for batch processing
+    
+    return fig
 
 def _delta_action(action):
     if action.shape[0] < 7:
@@ -553,8 +656,7 @@ def absolute_to_relative_action(current_state, target_state):
 def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, output_dir, camera_data=None):
     output_dir = Path(output_dir) / task_name / epoch_num
     output_dir.mkdir(parents=True, exist_ok=True)
-    n = np.random.randint(10000)
-    output_path = output_dir / f"comparison_{episode_idx:03d}_{n}.mp4"
+    output_path = output_dir / f"comparison_{episode_idx:03d}.mp4"
     
     camera_data = pred_data['camera_params']
 
@@ -755,7 +857,7 @@ def main():
 
     # episode_indices = np.array([i for i in range(30)] + [i for i in range(61, 90)])
     episode_indices = np.array([i for i in range(total_episodes)] )
-    episode_indices = np.array([4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4])+2
+    # episode_indices = np.array([4,12,6,3,1,11,13,7,9,8])
     #################################################################################
     # This is the episode which the states I manually set above guarantee with state
     # replay the robot will successfully pick and place the mug.
@@ -765,7 +867,7 @@ def main():
     # import pdb; pdb.set_trace()
     np.random.shuffle(episode_indices)
     for idx, episode_idx in enumerate(episode_indices):
-        # if episode_idx == 23: continue
+        if episode_idx == 29: continue
         if not simulation_app.is_running():
             break
 

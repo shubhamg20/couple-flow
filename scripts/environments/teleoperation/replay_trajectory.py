@@ -13,8 +13,8 @@ from isaaclab.app import AppLauncher
 from scipy.spatial.transform import Rotation as R
 
 parser = argparse.ArgumentParser(description="Replay recorded trajectories in Isaac Lab.")
-parser.add_argument("--trajectory_dir", type=str, required=True, help="Directory containing episode pkl files")
-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--trajectory_dir", type=str, default="source/recorded_runs/franka_set_1/sushi", help="Directory containing episode pkl files")
+parser.add_argument("--task", type=str, default="Isaac-PickPlace-Franka-custom", help="Name of the task.")
 parser.add_argument("--robot", type=str, default="franka", choices=["franka", "gr1t2"], help="Robot type")
 parser.add_argument(
     "--enable_pinocchio",
@@ -204,7 +204,7 @@ def main():
                     
                     env.sim.step(render=False)
                     
-                    for step_idx, step_data in enumerate(episode_trajectory):
+                    for step_idx, step_data in enumerate(episode_trajectory[:]):
                         if not simulation_app.is_running():
                             break
                         
@@ -215,22 +215,22 @@ def main():
                             if args_cli.robot == "gr1t2":
                                 env.step(actions[:, :36])
                             else:
-                                if actions[:,-1] > .5: actions[:,-1] = -.01
+                                if actions[:,-1] < .5: actions[:,-1] = -.01
                                 else: actions[:,-1] = 1.0
                                 env.step(actions[:, :7])
                         
                         # Update object states during replay
-                        if "objects" in step_data:
-                            for obj_name, obj_data in step_data["objects"].items():
-                                try:
-                                    obj = env.scene[obj_name]
-                                    obj_root_state = obj.data.root_state_w.clone()
-                                    obj_root_state[:, :3] = torch.tensor(obj_data["pos"], dtype=torch.float32, device=env.device)
-                                    if "quat" in obj_data:
-                                        obj_root_state[:, 3:7] = torch.tensor(obj_data["quat"], dtype=torch.float32, device=env.device)
-                                    obj.write_root_state_to_sim(obj_root_state, env_ids=env_ids)
-                                except KeyError:
-                                    pass
+                        # if "objects" in step_data:
+                        #     for obj_name, obj_data in step_data["objects"].items():
+                        #         try:
+                        #             obj = env.scene[obj_name]
+                        #             obj_root_state = obj.data.root_state_w.clone()
+                        #             obj_root_state[:, :3] = torch.tensor(obj_data["pos"], dtype=torch.float32, device=env.device)
+                        #             if "quat" in obj_data:
+                        #                 obj_root_state[:, 3:7] = torch.tensor(obj_data["quat"], dtype=torch.float32, device=env.device)
+                        #             obj.write_root_state_to_sim(obj_root_state, env_ids=env_ids)
+                        #         except KeyError:
+                        #             pass
                         
                         # Extract and visualize EEF data
                         if "franka_eef" in step_data:

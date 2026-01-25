@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from collections import deque
 import pickle
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 from isaaclab.app import AppLauncher
 from scipy.spatial.transform import Rotation as R
@@ -43,11 +45,10 @@ app_launcher_args = vars(args_cli)
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 #🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
 TRAIN_DATASET_PATH = "source/serl-flow/dataset/train_paired.pkl"  #required to extract stats
-VAL_DATASET_PATH = "source/serl-flow/dataset/validation_paired.pkl"
+VAL_DATASET_PATH = "source/serl-flow/dataset/train_toy_xyz.pkl"
 # VAL_DATASET_PATH = "source/serl-flow/source/serl-flow/dataset/validation.pkl"
-task_name = "flow-mixed"
-# task_name = "flow-mixed3"
-epoch_num = "1250"
+task_name = "flow-toy-xyz-debug"
+epoch_num = "500"
 actual_action = True
 bc_policy = True # true for gaussian, false for couple flow
 action_replay = False 
@@ -143,7 +144,7 @@ def get_object_poses_from_env(env):
 
     return object_poses
 
-def get_observation_from_env(env, episodes_ends, ep_latent_positions):
+def get_observation_from_env(env, episodes_ends, ep_latent_positions, class_label=None):
     """
     Extract observation from Isaac Lab environment.
     
@@ -167,10 +168,10 @@ def get_observation_from_env(env, episodes_ends, ep_latent_positions):
     # object_positions = torch.cat([object_positions[:3], object_positions[-3:]], dim=-1)
     obs = torch.cat([
         eef_pos_w,
-        torch.tensor(eef_rpy, dtype=torch.float32, device=env.device),
-        gripper_state,
-        object_positions[:]
-        # object_positions
+        # torch.tensor(eef_rpy, dtype=torch.float32, device=env.device),
+        # gripper_state,
+        object_positions[:],
+        # class_label.squeeze(0) if class_label is not None else torch.tensor([], device=env.device)
     ], dim=0)
     # if ep_latent_positions is not None: obs = add_latent_positions(obs, ep_latent_positions, env.device)
     return obs
@@ -297,12 +298,117 @@ def apply_demo_objects(env, demo_objects, env_ids):
             tray_asset.write_root_pose_to_sim(root_pose, env_ids=env_ids)
             tray_asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)
 
+def inv_flow_simple(flow_net, x1, cond, steps=50):
+    """Invert flow from x1 to x0 and return the full trajectory"""
+    batch_size = x1.shape[0]
+    curr_x = x1.clone()
+    dt = 1.0 / steps
+    
+    # Store trajectory - list of states at each timestep
+    trajectory = [curr_x.clone()]  # Start with x1 at t=1
+    for i in range(steps, 0, -1):
+        t_val = i / steps
+        t = torch.full((batch_size,), t_val, device=x1.device)
+        v = flow_net(curr_x, t, global_cond=cond)
+        curr_x = curr_x - v * dt
+        trajectory.append(curr_x.clone())
+
+    return curr_x  # Shape: [batch, timesteps+1, action_dim]
+
+def plot_3d_trajectories(stored_trajectories, save_path="trajectory_plot_3d.png"):
+    """Plot stored trajectories in 3D space with different colors for different task types."""
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Color mapping
+    color_map = {
+        'apple': 'red',
+        'mug': 'blue', 
+        'sushi': 'green',
+        None: 'black'  # For random sampling
+    }
+    
+    # Plot trajectories
+    for trajectory, task_name in stored_trajectories:
+        color = color_map.get(task_name, 'black')
+        label = task_name if task_name is not None else 'random'
+        
+        # trajectory is [H, 3] where H is the horizon
+        ax.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
+                color=color, alpha=0.7, linewidth=1.5, label=label)
+        
+        # Mark start and end points
+        ax.scatter(trajectory[0, 0], trajectory[0, 1], trajectory[0, 2], 
+                  color=color, s=50, marker='o', alpha=0.8)
+        ax.scatter(trajectory[-1, 0], trajectory[-1, 1], trajectory[-1, 2], 
+                  color=color, s=50, marker='s', alpha=0.8)
+    
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y') 
+    ax.set_zlabel('Z')
+    ax.set_title('3D Trajectories from Inverse Flow and Random Sampling')
+    
+    # Create legend with unique labels
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys())
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f"3D trajectory plot saved: {save_path}")
+    plt.show()
+
 def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_steps, max_episode_length, device, 
-                         pose_marker=None, save_trajectory=False, bc_policy=bc_policy):
+                         pose_marker=None, save_trajectory=False, bc_policy=bc_policy, stored_trajectories=None):
 
     # Reset environment
     obs, _ = env.reset()
     env_ids = torch.arange(env.num_envs, device=env.device)
+
+##################################################################################################
+    # # --- Prepare first observation and obs_cond ---
+    # start_idx = 0
+    # obs_horizon = cfg.obs_horizon
+    # obs_dim = dataset.normalized_train_data['state'].shape[1]
+    # obs_stack = torch.tensor(dataset.normalized_train_data['state'][start_idx:start_idx+obs_horizon])
+    # obs_cond = obs_stack.flatten().unsqueeze(0).to(env.device)  
+
+    # # --- Flow rollout sampling ---
+    # pred_horizon = cfg.pred_horizon
+    # action_dim = dataset.normalized_train_data['action'].shape[1]
+    # num_steps = 50
+    # dt = 1.0 / num_steps
+
+    # trajectories = []
+    # n = 100
+    # for i in range(n):
+    #     # Sample x0 ~ N(0,1)
+    #     x = torch.randn(pred_horizon, action_dim).unsqueeze(0)
+    #     x = x.to(obs_cond.device)
+    #     # Integrate flow
+    #     for fm_step in range(num_steps):
+    #         t = torch.tensor(fm_step * dt, device=obs_cond.device)
+    #         t_batch = t.unsqueeze(0)
+    #         vt = nets['flow_net'](x, t_batch, global_cond=obs_cond)
+    #         x = x + dt * vt
+    #     predicted_chunk = x.squeeze(0).detach().cpu().numpy()  # [pred_horizon, action_dim]
+    #     trajectories.append(predicted_chunk[:, :3])  # Only plot first 3 dims (position)
+
+    # # --- Plot all sampled trajectories ---
+    # fig = plt.figure(figsize=(10, 7))
+    # ax = fig.add_subplot(111, projection='3d')
+    # for traj in trajectories:
+    #     ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], alpha=0.7)
+    #     ax.scatter(traj[0, 0], traj[0, 1], traj[0, 2], color='green', s=30)  # Start
+    #     ax.scatter(traj[-1, 0], traj[-1, 1], traj[-1, 2], color='red', s=30)  # End
+    # ax.set_title(f"Sampled Flow Trajectories (n={n})")
+    # ax.set_xlabel('X')
+    # ax.set_ylabel('Y')
+    # ax.set_zlabel('Z')
+    # plt.tight_layout()
+    # plt.savefig("source/serl-flow/sampled_flow_trajectories.png", dpi=150, bbox_inches='tight')
+    # import pdb; pdb.set_trace()
+#####################################################################################################
 
     print(f"Starting episode...")
     # Get config parameters
@@ -315,9 +421,15 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
     if episode_idx > 0: start_idx = dataset.episode_ends[episode_idx - 1]
 
     apply_demo_objects(env, dataset.train_data["blocks_init_dict"][episode_idx], env_ids)
+    env.reset()
+    # Initialize gripper to open position
+    # open_action = torch.zeros(7, device=device)
+    # open_action[-1] = 1.0  # Open gripper command
+    # for _ in range(5):
+    #     _ = env.step(open_action.unsqueeze(0))
     
     # Let physics settle
-    sleep(2.0)
+    # sleep(2.0)
     #For visualization / evaluation
     gt_robot_data = {
         "images" : dataset.train_data['gt_robot_images'][start_idx:end_idx],
@@ -343,16 +455,10 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                 'object_poses': [],
                 'eef_poses': [],
                 'camera_params': {},
+                'task_names': []
             }
             trajectory_data['camera_params'] = get_camera_parameters(env, "tiled_camera")
         
-        # Initialize gripper to open position
-        open_action = torch.zeros(7, device=device)
-        open_action[-1] = 1.0  # Open gripper command
-        for _ in range(20):
-            _ = env.step(open_action.unsqueeze(0))
-            # image = get_image(env)
-            # trajectory_data['images'].append(image.cpu().numpy())
         gt_states = torch.tensor(dataset.normalized_train_data['state'][start_idx:end_idx]).to(device)
         max_steps = len(gt_states) 
         
@@ -364,29 +470,45 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             latent_variable =  dataset.train_data['human_action'][start_idx:end_idx]
         
         
-        current_obs = gt_states[0]
-        # current_obs = get_observation_from_env(env, episode_ends, latent_variable)
-        current_obs[6] = .04
-        # first_obs = current_obs.clone()
-
-        obs_history = deque(maxlen=obs_horizon)
-        for _ in range(obs_horizon):
-            obs_history.append(current_obs)
-        
         # Action ensembling buffer: dictionary mapping timestep -> list of predicted actions
         actions_queue = {}
         
         terminated = False
         truncated = False
         action_dim = 7 
-        
+        # Initialize gripper to open position
+        open_action = torch.zeros(7, device=device)
+        open_action[-1] = 1.0  # Open gripper command
+        for _ in range(20):
+            _ = env.step(open_action.unsqueeze(0))
         # Get initial image and set up for main loop
         image = get_image(env)
         prev_gripper = 1.0
         # for step_idx in tqdm(range(int(max_steps))):
-        # for step_idx in tqdm(range(int(len(gt_states)))):
-        for step_idx in tqdm(range(30)):
-
+        task_name = dataset.normalized_train_data['task_name'][start_idx]
+        class_label = []
+        if task_name == 'apple':
+            class_label = [1, 0, 0]
+        elif task_name == 'mug':
+            class_label = [0, 1, 0]
+        elif task_name == 'sushi':
+            class_label = [0, 0, 1]
+        else:
+            raise ValueError(f"Unknown task name: {task_name}")
+        class_label = torch.tensor(class_label, dtype=torch.float32, device=device).unsqueeze(0)
+        current_obs = get_observation_from_env(env, episode_ends, latent_variable, class_label=class_label)
+        current_obs = gt_states[1]
+        # print("initial data obs:", gt_states[0])
+        print("env", get_observation_from_env(env, episode_ends, latent_variable, class_label=class_label)[:])
+        current_obs[6] = .04
+        # first_obs = current_obs.clone()
+        task_name = None
+        obs_history = deque(maxlen=obs_horizon)
+        for _ in range(obs_horizon):
+            obs_history.append(current_obs)
+        # for step_idx in tqdm(range(70)):        
+        for step_idx in tqdm(range(1,40)):
+                                                                                                                     
             if terminated or truncated:
                 break
 
@@ -423,13 +545,35 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             else:
                 # Add more diversity to noise initialization
                 noise_scale = 1.0  # Increase noise scale for more diversity
-                x = noise_scale * torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
+                x = noise_scale * torch.randn(human_action_chunk.shape[0], action_dim-4, device=device).unsqueeze(0)
 
             _t = 0 # 0.2-0.8
-
-            x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
-
-            # Flow matching inference
+            # Probabilistic selection: 0.2 for inverse flow, 0.8 for random sampling
+            task_name = dataset.normalized_train_data['task_name'][start_idx]
+            if step_idx <= 4:
+                # use_inverse = np.random.rand() < 2.1
+                use_inverse = np.random.rand() < 0.0  # Set to 0.0 to force Random Sampling
+                task_name = dataset.normalized_train_data['task_name'][start_idx]
+                if task_name == "sushi": return None, None, None
+                if use_inverse:
+                    # Use inverse flow
+                    x = inv_flow_simple(nets['flow_net'], x1=gt_action_chunk[:,:3].unsqueeze(0), cond=obs_cond, steps=50)
+                    # Store trajectory (first 3 dimensions of the action trajectory)
+                    if stored_trajectories is not None:
+                        trajectory = x.squeeze(0)[:2, :3].detach().cpu().numpy()  # [H, 3]
+                        stored_trajectories.append((trajectory, task_name))
+                        print(f"Stored inverse flow trajectory for task: {task_name}")
+                else:
+                    # x = torch.randn(human_action_chunk.shape[0], action_dim-4, device=device).unsqueeze(0)
+                    x = torch.randn(human_action_chunk.shape[0], action_dim-4, device=device).unsqueeze(0)
+                    # Store trajectory (first 3 dimensions)
+                    if stored_trajectories is not None:
+                        trajectory = x.squeeze(0)[:2, :3].detach().cpu().numpy()  # [H, 3]  
+                        stored_trajectories.append((trajectory, None))  # None for random sampling
+                        print("Stored random sampling trajectory")
+            else:
+                x =  torch.randn(human_action_chunk.shape[0], action_dim-4, device=device).unsqueeze(0)                   
+        
             num_steps = 50
             dt = 1.0 / num_steps
             # for fm_step in range(num_steps):
@@ -440,7 +584,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                 vt = nets['flow_net'](x, t_batch, global_cond=obs_cond)
                 x = x + dt * vt
 
-            predicted_chunk = x.squeeze(0)[:8]  # [pred_horizon, action_dim]
+            predicted_chunk = x.squeeze(0)[:]  # [pred_horizon, action_dim]
             
             # Add predicted actions to the queue for their corresponding timesteps
             for act_t, act in enumerate(predicted_chunk):
@@ -451,6 +595,55 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                     actions_queue[target_step].append(act)
             
             action = torch.stack(actions_queue[step_idx], dim=0).mean(dim=0)
+            # Step through all actions in the predicted chunk (action horizon)
+            if step_idx == 1:
+                for act in predicted_chunk[:4]:
+                    action = act.detach().cpu()
+                    # # Track gripper state change and hold for 2 seconds (assuming 30Hz, ~60 steps)
+                    # if not hasattr(run_diffusion_policy, "gripper_hold_counter"):
+                    #     run_diffusion_policy.gripper_hold_counter = 0
+                    #     run_diffusion_policy.last_gripper_value = prev_gripper
+                    # gripper_changed = abs(action[-1] - run_diffusion_policy.last_gripper_value) > 1e-3
+                    # if gripper_changed:
+                    #     run_diffusion_policy.gripper_hold_counter = 60  # Hold for 2 seconds
+                    #     run_diffusion_policy.last_gripper_value = action[-1]
+                    # if action[-1] < .1:
+                    #     action[-1] = -.01  # close
+                    #     prev_gripper = action[-1]
+                    #     run_diffusion_policy.last_gripper_value = action[-1]
+                    # elif action[-1] > .1 :
+                    #     action[-1] = 1.0  # open
+                    #     prev_gripper = action[-1]
+                    #     run_diffusion_policy.last_gripper_value = action[-1]
+                    if actual_action:
+                        final_action = action
+                    elif not absolute_actions:
+                        final_action = _delta_action(action)
+                    else:
+                        final_action = absolute_to_relative_action(current_obs, action)
+                    final_action = torch.tensor([final_action[0], final_action[1], final_action[2],0,0,0,1.0], device=device)
+                    obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0))
+                    image = get_image(env)
+                    object_poses = get_object_poses_from_env(env)
+                    # Get new observation
+                    if state_replay: current_obs = gt_states[step_idx]
+                    else: current_obs = get_observation_from_env(env, episode_ends, latent_variable)
+                    # if step_idx < 10:
+                    #     current_obs[6] = .04
+                    obs_history.append(current_obs)
+                    # Record trajectory
+                    if save_trajectory:
+                        trajectory_data['observations'].append(current_obs.cpu().numpy())
+                        trajectory_data['task_names'].append(task_name)
+                        trajectory_data['images'].append(image.cpu().numpy())
+                        trajectory_data['actions'].append(action.cpu().numpy())
+                        trajectory_data['object_poses'].append(object_poses)
+                        trajectory_data['eef_poses'].append({
+                            'pos': current_obs[:3].cpu().numpy(),
+                            'rpy': current_obs[3:6].cpu().numpy()
+                        })
+                    if terminated or truncated:
+                        break
             # Clean up used actions
             del actions_queue[step_idx]
             
@@ -458,8 +651,8 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                 action = gt_action_chunk[0]  
             action = action.detach().cpu()
             # action = unnormalize_data(action, stats=norm_stats['action'])  # Actions are already normalized from flow network
-            print(action)
-            print("action:", action[-1])
+            # print(action)
+            # print("action:", action[-1])
             # Track gripper state change and hold for 2 seconds (assuming 30Hz, ~60 steps)
             if not hasattr(run_diffusion_policy, "gripper_hold_counter"):
                 run_diffusion_policy.gripper_hold_counter = 0
@@ -472,9 +665,9 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
 
             # if action[-1] < .1:
             #     action[-1] = -.01  # close
-                # prev_gripper = action[-1]
-                # run_diffusion_policy.last_gripper_value = action[-1]
-            # elif action[-1] > .2 :
+            #     prev_gripper = action[-1]
+            #     run_diffusion_policy.last_gripper_value = action[-1]
+            # elif action[-1] > .1 :
             #     action[-1] = 1.0  # open
             #     prev_gripper = action[-1]
             #     run_diffusion_policy.last_gripper_value = action[-1]
@@ -486,6 +679,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                     final_action = _delta_action(gt_action_chunk[0])
                 else: 
                     final_action = absolute_to_relative_action(current_obs, gt_action_chunk[0])
+                
                 obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0))
                 actions_queue = {}
             else: 
@@ -493,7 +687,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                     final_action = action
                 elif not absolute_actions:
                     # print("delta action:", action)
-                    # print("human action chunk:", human_action_chunk[0])
+                    # print("human action chunk:", human<_action_chunk[0])
                     print("current obs:", current_obs[:7])
                     final_action = _delta_action(action)
                     # final_action = action
@@ -501,14 +695,16 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                     final_action = absolute_to_relative_action(current_obs, action)
                     print("absolute action:", action)
                     print("current obs:", current_obs[:7])
+                final_action = torch.tensor([final_action[0], final_action[1], final_action[2],0,0,0,1.0], device=device)
                 obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0)) 
             image = get_image(env)
             object_poses = get_object_poses_from_env(env)
             
             # Get new observation
             if state_replay: current_obs = gt_states[step_idx]
+            # if step_idx < 8: current_obs = gt_states[step_idx]
             else: current_obs = get_observation_from_env(env, episode_ends, latent_variable)
-            # if step_idx < 5:
+            # if step_idx < 10:
             #     current_obs[6] = .04
             # current_obs[6] = 0.0
             obs_history.append(current_obs)
@@ -516,6 +712,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             # Record trajectory
             if save_trajectory:
                 trajectory_data['observations'].append(current_obs.cpu().numpy())
+                trajectory_data['task_names'].append(task_name)
                 trajectory_data['images'].append(image.cpu().numpy())
                 trajectory_data['actions'].append(action.cpu().numpy())
                 trajectory_data['object_poses'].append(object_poses)
@@ -553,8 +750,8 @@ def absolute_to_relative_action(current_state, target_state):
 def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, output_dir, camera_data=None):
     output_dir = Path(output_dir) / task_name / epoch_num
     output_dir.mkdir(parents=True, exist_ok=True)
-    n = np.random.randint(10000)
-    output_path = output_dir / f"comparison_{episode_idx:03d}_{n}.mp4"
+    task_gt = pred_data['task_names'][0]
+    output_path = output_dir / f"{task_gt}_{episode_idx:03d}.mp4" if task_gt is not None else output_dir / f"comparison_{episode_idx:03d}.mp4"
     
     camera_data = pred_data['camera_params']
 
@@ -723,6 +920,8 @@ def main():
         env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
         env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
         env.reset()
+        obs = get_observation_from_env(env, None, None)
+        print(obs)
     except Exception as e:
         omni.log.error(f"Failed to create environment: {e}")
         import traceback
@@ -752,10 +951,14 @@ def main():
     import random
     # random.seed(42)  # Ensures reproducibility
     total_episodes = len(val_dataset.episode_ends)
+    # total_episodes = 2
+
+    # Initialize storage for trajectories
+    stored_trajectories = []
 
     # episode_indices = np.array([i for i in range(30)] + [i for i in range(61, 90)])
-    episode_indices = np.array([i for i in range(total_episodes)] )
-    episode_indices = np.array([4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4])+2
+    episode_indices = np.array([i for i in range(total_episodes)])
+    # episode_indices = np.array([4,12,6,3,1,11,13,7,9,8])
     #################################################################################
     # This is the episode which the states I manually set above guarantee with state
     # replay the robot will successfully pick and place the mug.
@@ -765,7 +968,7 @@ def main():
     # import pdb; pdb.set_trace()
     np.random.shuffle(episode_indices)
     for idx, episode_idx in enumerate(episode_indices):
-        # if episode_idx == 23: continue
+        if episode_idx == 19: continue
         if not simulation_app.is_running():
             break
 
@@ -785,7 +988,8 @@ def main():
                 max_episode_length=args_cli.max_episode_length,
                 device=device,
                 pose_marker=pose_marker,
-                save_trajectory=args_cli.save_trajectories
+                save_trajectory=args_cli.save_trajectories,
+                stored_trajectories=stored_trajectories
             )
 
             # Save trajectory if requested
@@ -799,6 +1003,11 @@ def main():
             import traceback
             traceback.print_exc()
             break
+    
+    # Plot all collected trajectories in 3D
+    if stored_trajectories:
+        print(f"\nPlotting {len(stored_trajectories)} collected trajectories...")
+        plot_3d_trajectories(stored_trajectories, str(Path(args_cli.output_dir) / "trajectory_plot_3d.png"))
     
     env.close()
     print("Inference finished")

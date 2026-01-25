@@ -19,8 +19,8 @@ import torch.nn.functional as F
 import imageio.v3 as iio
 # Flow matching imports
 from flow_policy.configs import FlowMatchingModelRunConfig
-from flow_policy.make_networks import instantiate_flow_matching_artifacts
-from flow_policy.dataset import IsaacLabDataset
+from flow_policy.make_networks import instantiate_flow_cfg_artifacts, instantiate_classifier_artifacts
+from flow_policy.dataset_dsrl import IsaacLabDataset, unnormalize_data
 
 parser = argparse.ArgumentParser(description="Run diffusion policy inference in Isaac Lab.")
 parser.add_argument("--robot", type=str, default="franka", choices=["franka", "gr1t2"], help="Robot type")
@@ -39,15 +39,29 @@ args_cli = parser.parse_args()
 args_cli.task = "Isaac-PickPlace-Franka-custom"
 app_launcher_args = vars(args_cli)
 
-# Paths for validation dataset (used for normalization stats)
-VAL_DATASET_PATH = "source/serl-flow/dataset/validation.pkl"
-# VAL_DATASET_PATH = "source/serl-flow/dataset/train.pkl"
-# args_cli.checkpoint = "source/serl-flow/chkpts/single_task.pt"
-# args_cli.checkpoint = "source/serl-flow/chkpts/multitask_bc2.pt"
-task_name = "couple_flow_human_conditioning"
-epoch_num = "500"
+#🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
+#🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
+#🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
+TRAIN_DATASET_PATH = "source/serl-flow/dataset/train_mixed.pkl"  #required to extract stats
+VAL_DATASET_PATH = "source/serl-flow/dataset/validation_paired.pkl"
+# VAL_DATASET_PATH = "source/serl-flow/source/serl-flow/dataset/validation.pkl"
+task_name = "dsrl-flow-mixed"
+epoch_num = "600"
+task_name_cf = "classifier"
+epoch_num_cf = "31"
+actual_action = True
+bc_policy = True # true for gaussian, false for couple flow
+action_replay = False 
+state_replay = False
+latent =  None 
+# latent = "human_actions"
+#🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
+#🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
+#🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
+
+absolute_actions = True # does not matter dont chnage
 args_cli.checkpoint = "source/serl-flow/chkpts/" + task_name + "/epoch_" + epoch_num +".pt"
-explicit_conditioning = False   # Important variable 🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
+args_cli.checkpoint_cf = "source/serl-flow/chkpts/" + task_name_cf + "/epoch_" + epoch_num_cf +".pt"
 
 if args_cli.enable_pinocchio:
     import pinocchio  # noqa: F401
@@ -65,39 +79,33 @@ if args_cli.enable_pinocchio:
     import isaaclab_tasks.manager_based.manipulation.pick_place  # noqa: F401
 
 
-class NormalizationStats:
-    """Helper class to store and apply normalization statistics."""
-    
-    def __init__(self, dataset):
-        """Extract normalization stats from dataset."""
-        # Get stats from dataset
-        self.state_min = torch.tensor(dataset.stats['state']['min'], dtype=torch.float32)
-        self.state_max = torch.tensor(dataset.stats['state']['max'], dtype=torch.float32)
-    
-    def normalize_state(self, state, device='cuda'):
-        """Normalize state observation."""
-        min = self.state_min.to(device)
-        max = self.state_max.to(device)
-        nstate = (state - min) / (max - min + 1e-8)
-        # normalize to [-1, 1]
-        nstate = nstate * 2 - 1
-        return nstate
-
-def load_model_and_config(checkpoint_path, device='cuda'):
+def load_model_and_config(checkpoint_path, cf_chkpt_path, device='cuda'):
     """
     Load trained model and configuration from checkpoint.
     """
     print(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint_cf = torch.load(cf_chkpt_path, map_location=device, weights_only=False)
     
     # Extract config from checkpoint
     cfg = checkpoint['config']
+    cfg_cf = checkpoint_cf['config']
     print(f"Loaded config from checkpoint")
     
     # Initialize flow matching artifacts (model only)
-    nets, device = instantiate_flow_matching_artifacts(cfg, model_only=True)
+    nets, device = instantiate_flow_cfg_artifacts(cfg, model_only=True)
+    nets_cf, device = instantiate_classifier_artifacts(cfg_cf, model_only=True)
     
     # Load validation dataset for normalization stats
+    
+    train_dataset = IsaacLabDataset(
+        dataset_path=TRAIN_DATASET_PATH,
+        with_image=True,
+        pred_horizon=cfg.pred_horizon,
+        obs_horizon=cfg.obs_horizon,
+        action_horizon=cfg.action_horizon,
+        num_trajectories=cfg.dataset.num_traj,
+    )
     val_dataset = IsaacLabDataset(
         dataset_path=VAL_DATASET_PATH,
         with_image=True,
@@ -105,20 +113,49 @@ def load_model_and_config(checkpoint_path, device='cuda'):
         obs_horizon=cfg.obs_horizon,
         action_horizon=cfg.action_horizon,
         num_trajectories=cfg.dataset.num_traj,
+        stats = train_dataset.stats
     )
-    
-    # Load model weights
-    nets.load_state_dict(checkpoint['state_dict'])
+    # Load the checkpoint state dict
+    try:
+        # Try to load the entire ModuleDict first
+        nets.load_state_dict(checkpoint['state_dict'])
+        print(f"Successfully loaded full ModuleDict state dict")
+    except Exception as e:
+        print(f"Failed to load full state dict: {e}")
+        print("Attempting to load individual network weights...")
+        
+        # Fallback: separate flow_net and noise_net weights
+        state_dict = checkpoint['state_dict']
+        flow_state_dict = {}
+        
+        for key, value in state_dict.items():
+            if key.startswith('flow_net.'):
+                flow_state_dict[key.replace('flow_net.', '')] = value
+        # Load weights individually
+        if len(flow_state_dict) > 0:
+            print(f"Loading flow_net weights ({len(flow_state_dict)} keys)")
+            nets['flow_net'].load_state_dict(flow_state_dict)
+        
+        state_dict = checkpoint_cf['state_dict']
+        flow_state_dict = {}
+        
+        for key, value in state_dict.items():
+            if key.startswith('classifier_net.'):
+                flow_state_dict[key.replace('classifier_net.', '')] = value
+        # Load weights individually
+        if len(flow_state_dict) > 0:
+            print(f"Loading classifier_net weights ({len(flow_state_dict)} keys)")
+            nets_cf['classifier_net'].load_state_dict(flow_state_dict)
+        
     nets.eval()
+    nets_cf.eval()
     
     # Create normalization helper
-    norm_stats = NormalizationStats(val_dataset)
-    
+    norm_stats = train_dataset.stats
     print(f"Model loaded successfully. Best validation loss: {checkpoint.get('best_val_loss', 'N/A')}")
     print(f"Training epoch: {checkpoint.get('epoch', 'N/A')}")
     print(f"Pred horizon: {cfg.pred_horizon}, Obs horizon: {cfg.obs_horizon}, Action horizon: {cfg.action_horizon}")
-    
-    return nets, val_dataset, cfg, device, norm_stats
+    return nets, nets_cf, val_dataset, cfg, device, norm_stats
 
 def get_object_poses_from_env(env):
     object_names = ["apple", "mug", "sushi"]
@@ -149,14 +186,7 @@ def get_observation_from_env(env, episodes_ends, ep_latent_positions):
     gripper_indices = [joint_names.index("panda_finger_joint1"), joint_names.index("panda_finger_joint2")]
     gripper_state = joint_positions[gripper_indices].mean()
     gripper_state = torch.tensor([gripper_state], dtype=torch.float32, device=env.device)
-    gripper_state = -(gripper_state - 0.03999)/0.03999       #0.03999->0  open              franka 0->close,   1->open
-    print("real gripper state:", gripper_state.item())
-    gripper_state = torch.tensor(                            #0->1 close
-        [1.0 if float(gripper_state) > 0.3 else 0.0],
-        dtype=torch.float32,
-        device=env.device
-    )
-
+    # gripper_state = 1.0 if gripper_state < 0.03 else .0
     object_poses = get_object_poses_from_env(env)
     object_positions = torch.cat(list(object_poses.values()), dim=-1)
     # object_positions = torch.cat([object_positions[:3], object_positions[-3:]], dim=-1)
@@ -164,8 +194,8 @@ def get_observation_from_env(env, episodes_ends, ep_latent_positions):
         eef_pos_w,
         torch.tensor(eef_rpy, dtype=torch.float32, device=env.device),
         gripper_state,
-        # object_positions[:3]
-        object_positions
+        object_positions[:]
+        # object_positions
     ], dim=0)
     if ep_latent_positions is not None: obs = add_latent_positions(obs, ep_latent_positions, env.device)
     return obs
@@ -206,7 +236,7 @@ def project_pose_to_image(ee_pos, camera_data, img_shape):
     return None
 
 
-def draw_trajectory_on_frame(img, all_projections, current_idx):
+def draw_trajectory_on_frame(img, all_projections, current_idx, is_eef=False):
     """Draw all EE positions up to current frame as green dots."""
     # Draw all previous points
     for i in range(current_idx + 1):
@@ -219,7 +249,17 @@ def draw_trajectory_on_frame(img, all_projections, current_idx):
             if i > 0 and all_projections[i-1] is not None:
                 u_prev, v_prev = all_projections[i-1]
                 cv2.line(img, (u_prev, v_prev), (u, v), (0, 255, 0), 1)
-    
+
+            twenty_percent_idx = int(0. * len(all_projections))
+            if is_eef and i >= twenty_percent_idx:
+                # Draw red X at 20% timestep mark
+                if twenty_percent_idx < len(all_projections) and all_projections[twenty_percent_idx] is not None:
+                    u, v = all_projections[twenty_percent_idx]
+                    # Draw red X with lines
+                    line_length = 2
+                    cv2.line(img, (u - line_length, v - line_length), (u + line_length, v + line_length), (0, 0, 255), 2)
+                    cv2.line(img, (u - line_length, v + line_length), (u + line_length, v - line_length), (0, 0, 255), 2)
+        
     # Highlight current position with larger circle
     if all_projections[current_idx] is not None:
         u, v = all_projections[current_idx]
@@ -244,24 +284,50 @@ def get_image(env) -> torch.Tensor:
 
 def apply_demo_objects(env, demo_objects, env_ids):
     """Apply demo object positions to scene."""
+    ############################## FOR DEBUGGING MUG CONVEX DECOMPOSITION #####################################
+    positions = {
+        "tray": {
+            "pos": [0.41, 0.42, 1.0],
+            "quat": [0.707, 0.707, 0.0, 0.0]
+        }
+    }
+    ############################################################################################################
+
     for obj_name in ["apple", "mug", "sushi"]:
         if obj_name in env.scene.keys() and obj_name in demo_objects:
             asset = env.scene[obj_name]
             pos = torch.tensor(demo_objects[obj_name]["pos"], device=env.device).unsqueeze(0)
             quat = torch.tensor(demo_objects[obj_name]["quat"], device=env.device).unsqueeze(0)
+            ############################## FOR DEBUGGING MUG CONVEX DECOMPOSITION #####################################
+            # pos = torch.tensor(debug_positions[obj_name]["pos"], device=env.device).unsqueeze(0)
+            # quat = torch.tensor(debug_positions[obj_name]["quat"], device=env.device).unsqueeze(0)
+            ############################################################################################################
             root_pose = torch.cat([pos, quat], dim=-1)
             velocities = torch.zeros((1, 6), device=env.device)
             asset.write_root_pose_to_sim(root_pose, env_ids=env_ids)
             asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)
+    
+    # Handle tray separately since it's an XFormPrim, not a RigidObject
+    if "tray" in env.scene.keys():
+        tray_asset = env.scene["tray"]
+        if hasattr(tray_asset, 'set_world_poses'):
+            pos = torch.tensor(positions["tray"]["pos"], device=env.device).unsqueeze(0)
+            quat = torch.tensor(positions["tray"]["quat"], device=env.device).unsqueeze(0)
+            tray_asset.set_world_poses(pos, quat)
+        elif hasattr(tray_asset, 'write_root_pose_to_sim'):
+            pos = torch.tensor(positions["tray"]["pos"], device=env.device).unsqueeze(0)
+            quat = torch.tensor(positions["tray"]["quat"], device=env.device).unsqueeze(0)
+            root_pose = torch.cat([pos, quat], dim=-1)
+            velocities = torch.zeros((1, 6), device=env.device)
+            tray_asset.write_root_pose_to_sim(root_pose, env_ids=env_ids)
+            tray_asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)
 
-def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_steps, max_episode_length, device, 
-                         pose_marker=None, save_trajectory=False, bc_policy=False):
+def run_diffusion_policy(env, dataset, episode_idx, nets, nets_cf, norm_stats, cfg, num_steps, max_episode_length, device, 
+                         pose_marker=None, save_trajectory=False, bc_policy=bc_policy):
 
     # Reset environment
     obs, _ = env.reset()
     env_ids = torch.arange(env.num_envs, device=env.device)
-
-    state_replay = True  # Whether to use ground-truth state replay for observations
 
     print(f"Starting episode...")
     # Get config parameters
@@ -288,6 +354,8 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
     episode_ends = dataset.episode_ends
     print("🚀 Starting trajectory inference...")
     nets.eval()
+    nets_cf.eval()
+    prev_action = torch.zeros(7, device=device)
     with torch.no_grad():
         # Initialize trajectory recording
         if save_trajectory:
@@ -302,23 +370,21 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             trajectory_data['camera_params'] = get_camera_parameters(env, "tiled_camera")
         
         gt_states = torch.tensor(dataset.normalized_train_data['state'][start_idx:end_idx]).to(device)
-        # gt_states = torch.cat([gt_states[:,:7], gt_states[:,-3:]], dim=-1)  # Use only EEF pos, rpy and object pos
-        max_steps = len(gt_states) if state_replay else max_episode_length
+        max_steps = len(gt_states) 
         
-        # max_steps = max_episode_length
-
-        #Important 🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖🤖
-        # latent_variable =  None
-        # latent_variable =  human_data["object_poses"]
-        latent_variable =  dataset.train_data['human_action'][start_idx:end_idx]
-        if state_replay: 
-            current_obs = gt_states[0]
-        # else:
+        
+        if latent == None:
+            latent_variable =  None
+        elif latent == "human_actions":
+            # latent_variable =  human_data["object_poses"]
+            latent_variable =  dataset.train_data['human_action'][start_idx:end_idx]
+        
+        
+        current_obs = gt_states[0]
         # current_obs = get_observation_from_env(env, episode_ends, latent_variable)
+        current_obs[6] = .04
+        # first_obs = current_obs.clone()
 
-        # import pdb; pdb.set_trace() 
-        current_obs[6] = 0.0 
-        # Initialize observation history buffer
         obs_history = deque(maxlen=obs_horizon)
         for _ in range(obs_horizon):
             obs_history.append(current_obs)
@@ -328,17 +394,11 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
         
         terminated = False
         truncated = False
-        action_dim = 7 
-        _action = torch.zeros(action_dim, device=device)
-        _action[-1] = 1.0  # Open gripper initially
-        for _ in range(10): _ = env.step(_action.unsqueeze(0))
-        sleep(3)
+        sleep(2.0) 
         image = get_image(env)
-        prev_action = 1.0
+        prev_gripper = 1.0
         # for step_idx in tqdm(range(int(max_steps))):
         for step_idx in tqdm(range(int(len(gt_states)))):
-        # for step_idx in tqdm(range(10)):
-            # print(gt_states[step_idx][-3:])
             if terminated or truncated:
                 break
 
@@ -358,34 +418,50 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
                 padding = torch.zeros(pred_horizon - human_action_chunk.shape[0], 
                                     human_action_chunk.shape[1], device=device)
                 human_action_chunk = torch.cat([human_action_chunk, padding], dim=0)
-
-            # if explicit_conditioning:
-            #     obs_cond = torch.cat([obs_cond, human_action_chunk.flatten().unsqueeze(0)], dim=-1)
-
-            
-            if not explicit_conditioning:
-                if human_action_chunk.shape[-1] < action_dim:
-                    diff_dims = action_dim - human_action_chunk.shape[-1]
-                    noise = torch.randn(*human_action_chunk.shape[:-1], diff_dims, device=device)
-                    x = torch.cat([human_action_chunk[:, :3], noise, human_action_chunk[:, 3:]], dim=-1)
-                    x = x.unsqueeze(0)
+            action_dim = 7
+            if not bc_policy:
+                if not torch.all(human_action_chunk == -1):
+                    if human_action_chunk.shape[-1] < action_dim:
+                        diff_dims = action_dim - human_action_chunk.shape[-1]
+                        noise = torch.randn(*human_action_chunk.shape[:-1], diff_dims, device=device)
+                        print("using human action with noise")
+                        x = torch.cat([human_action_chunk[:, :3], noise, human_action_chunk[:, 3:]], dim=-1)
+                        x = x.unsqueeze(0)
+                    else:
+                        x = human_action_chunk.unsqueeze(0)
                 else:
-                    x = human_action_chunk.unsqueeze(0)
-
+                    x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)   
+                
             else:
                 x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
 
-            if bc_policy:
-                x = torch.randn_like(gt_action_chunk).unsqueeze(0) 
+            _t = 0 # 0.2-0.8
+            x = x#torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
+
+
+            human_context = dataset.normalized_train_data['human_context'][start_idx]
+            class_label = dataset.normalized_train_data['class_labels'][start_idx][0]
+            # import pdb; pdb.set_trace()
+            human_context = torch.from_numpy(human_context).to(device)
             # Flow matching inference
+            num_steps = 50
             dt = 1.0 / num_steps
-            for fm_step in range(num_steps):
+            # for fm_step in range(num_steps):
+            for fm_step in range(int((.0)*num_steps), num_steps):
                 t = torch.tensor(fm_step * dt, device=device)
-                t_batch = t.unsqueeze(0)  # [1]
-                vt = nets['flow_net'](x, t_batch, global_cond=obs_cond)
+                t_batch = t.unsqueeze(0)
+
+                v_uncond = nets['flow_net'](
+                    x, t_batch, global_cond=obs_cond
+                )
+                cf_cond = torch.cat([obs_cond, human_context.unsqueeze(0)], dim=-1)
+                s = 2.0
+                vt = v_uncond - s*nets_cf['classifier_net'].get_class_gradients(
+                    x, t_batch, global_cond=cf_cond, target_class=class_label
+                )
                 x = x + dt * vt
-            action_horizon = 8
-            predicted_chunk = x.squeeze(0)[:action_horizon]  # [pred_horizon, action_dim]
+
+            predicted_chunk = x.squeeze(0)[:8]  # [pred_horizon, action_dim]
             
             # Add predicted actions to the queue for their corresponding timesteps
             for act_t, act in enumerate(predicted_chunk):
@@ -399,44 +475,63 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             # Clean up used actions
             del actions_queue[step_idx]
             
-            # Step environment
-            # action = gt_action_chunk[0]  
-            # action = predicted_chunk[0]
-            # action = torch.cat([action[:3], torch.zeros(3, device=device), action[3:]], dim=0)
+            if action_replay:
+                action = gt_action_chunk[0]  
+            action = action.detach().cpu()
+            # action = unnormalize_data(action, stats=norm_stats['action'])
+            print(action)
             print("action:", action[-1])
-            if action[-1] > 0.2:
+            # Track gripper state change and hold for 2 seconds (assuming 30Hz, ~60 steps)
+            if not hasattr(run_diffusion_policy, "gripper_hold_counter"):
+                run_diffusion_policy.gripper_hold_counter = 0
+                run_diffusion_policy.last_gripper_value = prev_gripper
+
+            gripper_changed = abs(action[-1] - run_diffusion_policy.last_gripper_value) > 1e-3
+            if gripper_changed:
+                run_diffusion_policy.gripper_hold_counter = 60  # Hold for 2 seconds
+                run_diffusion_policy.last_gripper_value = action[-1]
+
+            if action[-1] < .5:
                 action[-1] = -.01  # close
-                prev_action = action[-1]
-            elif action[-1] < 0.5: 
+                prev_gripper = action[-1]
+                run_diffusion_policy.last_gripper_value = action[-1]
+            elif action[-1] > .5 :
                 action[-1] = 1.0  # open
-                prev_action = action[-1]
-            else: action[-1] = prev_action  # maintain
-            # if step_idx < 40: action[-1] = 0.0  # keep open for first 20 steps
-            if step_idx < int(.15*max_steps): 
-                obs, reward, terminated, truncated, info = env.step(gt_action_chunk[0].unsqueeze(0))
+                prev_gripper = action[-1]
+                run_diffusion_policy.last_gripper_value = action[-1]
+            
+            if step_idx < int(.0*max_steps): 
+                if actual_action:
+                    final_action = gt_action_chunk[0]
+                elif not absolute_actions:
+                    final_action = _delta_action(gt_action_chunk[0])
+                else: 
+                    final_action = absolute_to_relative_action(current_obs, gt_action_chunk[0])
+                obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0))
+                actions_queue = {}
             else: 
-                obs, reward, terminated, truncated, info = env.step(action.unsqueeze(0))
+                if actual_action:
+                    final_action = action
+                elif not absolute_actions:
+                    # print("delta action:", action)
+                    # print("human action chunk:", human_action_chunk[0])
+                    print("current obs:", current_obs[:7])
+                    final_action = _delta_action(action)
+                    # final_action = action
+                else: 
+                    final_action = absolute_to_relative_action(current_obs, action)
+                    print("absolute action:", action)
+                    print("current obs:", current_obs[:7])
+                obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0)) 
             image = get_image(env)
             object_poses = get_object_poses_from_env(env)
             
             # Get new observation
-            # if state_replay: current_obs = gt_states[step_idx]
-            # print(get_observation_from_env(env, episode_ends, latent_variable))
-            # else: current_obs = get_observation_from_env(env)
-            
-            
-            current_obs = get_observation_from_env(env, episode_ends, latent_variable)
-            # print("obs:", current_obs[6])
-            # if step_idx < 20: current_obs[6] = 0.0
-            # # current_obs[6] = 0.0
-            # current_obs = torch.cat([current_obs, gt_states[0][-3:]], dim=-1) 
-            # # current_obs = torch.cat([current_obs], dim=-1) 
-            # obs_history.append(current_obs)
-
-
-            # next_idx = min(step_idx + 1, gt_states.shape[0] - 1)
-            # current_obs = gt_states[next_idx]            # shape == cfg.state_len used in training
-            # import pdb; pdb.set_trace()
+            if state_replay: current_obs = gt_states[step_idx]
+            else: current_obs = get_observation_from_env(env, episode_ends, latent_variable)
+            # current_obs[6] = 0.0
+            if step_idx < 5:
+                current_obs[6] = .04
             obs_history.append(current_obs)
 
             # Record trajectory
@@ -453,6 +548,28 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
     print(f"✅ Trajectory completed: {len(trajectory_data['actions']) if save_trajectory else step_idx} steps")
     return trajectory_data, gt_robot_data, human_data if save_trajectory else None
 
+def _delta_action(action):
+    if action.shape[0] < 7:
+        pad = torch.zeros(7 - action.shape[0], device=action.device)
+        action = torch.cat([action, pad], dim=0)
+    final_action = change_axis(action)
+    final_action[:6] *= 5.0
+    final_action[6] = 1.0
+    return final_action
+
+def change_axis(action):
+    pos_action = torch.tensor([action[1], -action[0], action[2], action[4], -action[3], action[5], action[-1]], device=action.device)
+    return pos_action
+
+def absolute_to_relative_action(current_state, target_state):
+    final_action = target_state[:6] - current_state[:6]
+    final_action = torch.cat([final_action, target_state[6:7]], dim=0)
+    final_action *= 6.5
+    # final_action[3] = 0
+    # final_action[4] = 0
+    # final_action[5] = 0
+    final_action = change_axis(final_action)
+    return final_action
 
 def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, output_dir, camera_data=None):
     output_dir = Path(output_dir) / task_name / epoch_num
@@ -465,7 +582,26 @@ def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, out
     pred_imgs, pred_eef, pred_objs = pred_data['images'], pred_data['eef_poses'], pred_data['object_poses']
     gt_imgs, gt_eef, gt_objs = gt_robot_data['images'], gt_robot_data['eef_poses'], gt_robot_data['object_poses']
     human_imgs, human_eef, human_objs = human_data['images'], human_data['eef_poses'], human_data['object_poses']
+    human_imgs = np.array(human_imgs)
+    gt_imgs = np.array(gt_imgs)
     
+    # Check if human images are valid (not just -1 values)
+    has_valid_human_imgs = not np.all(human_imgs == -1)
+    # Check if gt images are valid (not just -1 values)
+    has_valid_gt_imgs = not np.all(gt_imgs == -1)
+    
+    if not has_valid_human_imgs:
+        print(f"[INFO] Human images are invalid (-1 values) for episode {episode_idx}")
+        human_imgs, human_eef, human_objs = None, None, None
+        
+    if not has_valid_gt_imgs:
+        print(f"[INFO] Ground truth images are invalid (-1 values) for episode {episode_idx}")
+        gt_imgs, gt_eef, gt_objs = None, None, None
+    
+    # Count valid image sources
+    valid_sources = sum([True, has_valid_gt_imgs, has_valid_human_imgs])  # pred is always valid
+    print(f"[INFO] Creating {valid_sources}-panel comparison for episode {episode_idx}")
+
     n_frames = len(pred_imgs)
     frames = []
     
@@ -485,12 +621,12 @@ def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, out
                     obj_proj[name].append(project_pose_to_image(p, cam, img_shape))
         return eef_proj, obj_proj
     
-    if gt_imgs.shape[0] < n_frames:
+    if has_valid_gt_imgs and gt_imgs.shape[0] < n_frames:
         gt_pad = n_frames - gt_imgs.shape[0]
         last_gt = gt_imgs[-1:,...]
         gt_imgs = np.concatenate([gt_imgs, np.repeat(last_gt, gt_pad, axis=0)], axis=0)
 
-    if human_imgs.shape[0] < n_frames:
+    if has_valid_human_imgs and human_imgs.shape[0] < n_frames:
         human_pad = n_frames - human_imgs.shape[0]
         last_human = human_imgs[-1:,...]
         human_imgs = np.concatenate([human_imgs, np.repeat(last_human, human_pad, axis=0)], axis=0)
@@ -498,8 +634,14 @@ def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, out
     if camera_data:
         img_shape = pred_imgs[0].shape
         pred_eef_proj, pred_obj_proj = project_all(pred_eef, pred_objs, camera_data, img_shape)
-        gt_eef_proj, gt_obj_proj = project_all(gt_eef, gt_objs, camera_data, img_shape)
-        human_eef_proj, human_obj_proj = project_all(human_eef, human_objs, camera_data, img_shape)
+        if has_valid_gt_imgs:
+            gt_eef_proj, gt_obj_proj = project_all(gt_eef, gt_objs, camera_data, img_shape)
+        else:
+            gt_eef_proj, gt_obj_proj = None, None
+        if has_valid_human_imgs:
+            human_eef_proj, human_obj_proj = project_all(human_eef, human_objs, camera_data, img_shape)
+        else:
+            human_eef_proj, human_obj_proj = None, None
 
     # Pad pred_eef_proj, pred_obj_proj, gt_eef_proj, gt_obj_proj, human_eef_proj, human_obj_proj if needed
     if len(pred_eef_proj) < n_frames:
@@ -510,7 +652,7 @@ def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, out
             last_pred_obj = pred_obj_proj[name][-1]
             pred_obj_proj[name] += [last_pred_obj] * pad_len
 
-    if len(gt_eef_proj) < n_frames:
+    if has_valid_gt_imgs and len(gt_eef_proj) < n_frames:
         pad_len = n_frames - len(gt_eef_proj)
         last_gt_eef = gt_eef_proj[-1]
         gt_eef_proj += [last_gt_eef] * pad_len
@@ -518,7 +660,7 @@ def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, out
             last_gt_obj = gt_obj_proj[name][-1]
             gt_obj_proj[name] += [last_gt_obj] * pad_len
 
-    if len(human_eef_proj) < n_frames:
+    if has_valid_human_imgs and len(human_eef_proj) < n_frames:
         pad_len = n_frames - len(human_eef_proj)
         last_human_eef = human_eef_proj[-1]
         human_eef_proj += [last_human_eef] * pad_len
@@ -531,11 +673,25 @@ def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, out
     for i in range(n_frames):
         # Process each image
         imgs = []
-        for img_data, eef_proj, obj_proj, color in [
-            (pred_imgs[i], pred_eef_proj , pred_obj_proj, (0, 255, 0)),
-            (gt_imgs[i], gt_eef_proj, gt_obj_proj , (255, 165, 0)),
-            (human_imgs[i], human_eef_proj, human_obj_proj , (0, 165, 255))
-        ]:
+        # Define which data sources to include based on image validity
+        img_sources = []
+        labels = []
+        
+        # Always include predictions (assumed to be valid)
+        img_sources.append((pred_imgs[i], pred_eef_proj, pred_obj_proj, (0, 255, 0)))
+        labels.append('Predictions')
+        
+        # Add ground truth if valid
+        if has_valid_gt_imgs:
+            img_sources.append((gt_imgs[i], gt_eef_proj, gt_obj_proj, (255, 165, 0)))
+            labels.append('Ground Truth')
+            
+        # Add human actions if valid
+        if has_valid_human_imgs:
+            img_sources.append((human_imgs[i], human_eef_proj, human_obj_proj, (0, 165, 255)))
+            labels.append('Human Actions')
+            
+        for img_data, eef_proj, obj_proj, color in img_sources:
 
             if isinstance(img_data, (bytes, bytearray)):
                 img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)[:,:,::-1]
@@ -545,14 +701,14 @@ def save_comparison_video(pred_data, gt_robot_data, human_data, episode_idx, out
             img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             
             if camera_data and eef_proj:
-                img_bgr = draw_trajectory_on_frame(img_bgr, eef_proj, i)
+                img_bgr = draw_trajectory_on_frame(img_bgr, eef_proj, i, is_eef=True)
                 for proj_list in obj_proj.values():
                     img_bgr = draw_trajectory_on_frame(img_bgr, proj_list, i)
             
             imgs.append(img_bgr)
         
         # Add labels
-        for idx, (img, label) in enumerate(zip(imgs, ['Predictions', 'Ground Truth', 'Human Actions'])):
+        for idx, (img, label) in enumerate(zip(imgs, labels)):
             color = (0, 255, 0) if idx == 0 else (255, 255, 255)
             text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
             text_x = (img.shape[1] - text_size[0]) // 2
@@ -574,7 +730,7 @@ def main():
     
     # Load model
     try:
-        nets, val_dataset, cfg, device, norm_stats = load_model_and_config(args_cli.checkpoint)
+        nets, nets_cf, val_dataset, cfg, device, norm_stats = load_model_and_config(args_cli.checkpoint, args_cli.checkpoint_cf)
     except Exception as e:
         omni.log.error(f"Failed to load model: {e}")
         import traceback
@@ -619,10 +775,17 @@ def main():
 
     # episode_indices = np.array([i for i in range(30)] + [i for i in range(61, 90)])
     episode_indices = np.array([i for i in range(total_episodes)] )
+    # episode_indices = np.array([4,12,6,3,1,11,13,7,9,8])
+    #################################################################################
+    # This is the episode which the states I manually set above guarantee with state
+    # replay the robot will successfully pick and place the mug.
+    # episode_indices = np.array([20])
+    ##################################################################################
+    # episode_indices = np.array([0])
     # import pdb; pdb.set_trace()
     np.random.shuffle(episode_indices)
     for idx, episode_idx in enumerate(episode_indices):
-        if episode_idx == 23: continue
+        # if episode_idx == 23: continue
         if not simulation_app.is_running():
             break
 
@@ -636,6 +799,7 @@ def main():
                 dataset=val_dataset,
                 episode_idx=episode_idx,
                 nets=nets,
+                nets_cf=nets_cf,
                 norm_stats=norm_stats,
                 cfg=cfg,
                 num_steps=args_cli.num_steps,

@@ -25,8 +25,8 @@ parser.add_argument("--no_overlay", action="store_true", help="Disable EE trajec
 args = parser.parse_args()
 
 # Find all episode files or specific episode
-task_dir = Path(f"source/recorded_runs/{args.robot}_ood/{args.task_name}")
-output_dir = Path(f"source/recorded_runs/{args.robot}_ood/{args.task_name}/videos")
+task_dir = Path(f"source/recorded_runs/{args.robot}_paired/{args.task_name}")
+output_dir = Path(f"source/recorded_runs/{args.robot}_paired/{args.task_name}/videos")
 
 if args.episode is not None:
     # Process single episode

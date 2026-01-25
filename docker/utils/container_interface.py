@@ -262,6 +262,22 @@ class ContainerInterface:
             env=self.environ,
         )
 
+    def restart(self):
+        """Restart the running container using the Docker restart command.
+
+        Raises:
+            RuntimeError: If the container is not running.
+        """
+        if self.is_container_running():
+            print(f"[INFO] Restarting the docker container '{self.container_name}'...\n")
+            subprocess.run([
+                "docker",
+                "restart",
+                self.container_name,
+            ], check=False)
+        else:
+            raise RuntimeError(f"Can't restart container '{self.container_name}' as it is not running.")
+
     """
     Helper functions.
     """

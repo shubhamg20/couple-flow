@@ -83,7 +83,7 @@ def parse_cli_args() -> argparse.Namespace:
         "copy", help="Copy build and logs artifacts from the container to the host machine.", parents=[parent_parser]
     )
     subparsers.add_parser("stop", help="Stop the docker container and remove it.", parents=[parent_parser])
-
+    subparsers.add_parser("restart", help="Restart the docker container without removing it.", parents=[parent_parser])
     # parse the arguments to determine the command
     args = parser.parse_args()
 
@@ -133,6 +133,8 @@ def main(args: argparse.Namespace):
         ci.stop()
         # cleanup the x11 forwarding
         x11_utils.x11_cleanup(ci.statefile)
+    elif args.command == "restart":
+        ci.restart()
     else:
         raise RuntimeError(f"Invalid command provided: {args.command}. Please check the help message.")
 
