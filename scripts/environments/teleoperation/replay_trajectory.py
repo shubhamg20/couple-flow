@@ -13,7 +13,7 @@ from isaaclab.app import AppLauncher
 from scipy.spatial.transform import Rotation as R
 
 parser = argparse.ArgumentParser(description="Replay recorded trajectories in Isaac Lab.")
-parser.add_argument("--trajectory_dir", type=str, default="source/recorded_runs/franka_set_1/sushi", help="Directory containing episode pkl files")
+parser.add_argument("--trajectory_dir", type=str, default="source/recorded_runs/franka_new/apple", help="Directory containing episode pkl files")
 parser.add_argument("--task", type=str, default="Isaac-PickPlace-Franka-custom", help="Name of the task.")
 parser.add_argument("--robot", type=str, default="franka", choices=["franka", "gr1t2"], help="Robot type")
 parser.add_argument(

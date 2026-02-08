@@ -159,3 +159,72 @@ def illegal_contact(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneE
     return torch.any(
         torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0] > threshold, dim=1
     )
+
+
+def object_touching_tray(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("sushi"),
+    tray_cfg: SceneEntityCfg = SceneEntityCfg("tray"),
+    max_distance_x: float = 0.10,
+    max_distance_y: float = 0.10,
+    max_distance_z: float = 0.05,
+    min_distance_z: float = -0.02,
+    max_velocity: float = 0.10,
+) -> torch.Tensor:
+    """Determine if an object is touching the tray.
+    
+    This function checks whether an object has dropped onto and is touching the tray:
+    1. Object is within horizontal distance threshold (x, y) from tray center
+    2. Object is within vertical distance threshold (z) from tray surface
+    3. Object velocity is below threshold (indicating it has settled)
+    
+    Args:
+        env: The RL environment instance.
+        object_cfg: Configuration for the object entity (sushi, apple, or mug).
+        tray_cfg: Configuration for the tray entity.
+        max_distance_x: Maximum horizontal distance in x direction for touching (default: 0.10m).
+        max_distance_y: Maximum horizontal distance in y direction for touching (default: 0.10m).
+        max_distance_z: Maximum vertical distance above tray surface for touching (default: 0.05m).
+        min_distance_z: Minimum vertical distance (allows slight penetration, default: -0.02m).
+        max_velocity: Maximum velocity magnitude for object to be considered settled (default: 0.10 m/s).
+    
+    Returns:
+        Boolean tensor indicating which environments have the object touching the tray.
+    """
+    # Get object entity from the scene (RigidObject)
+    object: RigidObject = env.scene[object_cfg.name]
+    
+    # Get tray from extras (XFormPrim, not RigidObject)
+    tray = env.scene.extras[tray_cfg.name]
+    
+    # Get positions relative to environment origin
+    object_pos = object.data.root_pos_w - env.scene.env_origins
+    
+    # Get tray position using get_world_poses for XFormPrim
+    env_ids = torch.arange(env.scene.num_envs, device=env.device)
+    tray_pos_w, _ = tray.get_world_poses(env_ids)
+    tray_pos = tray_pos_w - env.scene.env_origins
+    
+    # Compute relative positions (CENTER TO CENTER comparison)
+    # Note: This compares object center to tray center, not object bottom to tray top
+    # For small objects, the center-to-center z distance should be close to zero when touching
+    object_to_tray_x = torch.abs(object_pos[:, 0] - tray_pos[:, 0])
+    object_to_tray_y = torch.abs(object_pos[:, 1] - tray_pos[:, 1])
+    object_to_tray_z = object_pos[:, 2] - tray_pos[:, 2]
+    
+    # Get object velocity magnitude
+    object_vel = torch.norm(object.data.root_vel_w, dim=1)
+    
+    # Check all conditions for touching
+    # 1. Object is within horizontal distance from tray center
+    done = object_to_tray_x < max_distance_x
+    done = torch.logical_and(done, object_to_tray_y < max_distance_y)
+    
+    # 2. Object center is within vertical distance from tray center (center-to-center)
+    # For touching, object center should be very close to tray center in z (accounting for object height)
+    done = torch.logical_and(done, object_to_tray_z < max_distance_z)
+    done = torch.logical_and(done, object_to_tray_z > min_distance_z)
+    
+    # 3. Object velocity is low (has settled)
+    done = torch.logical_and(done, object_vel < max_velocity)
+    return done

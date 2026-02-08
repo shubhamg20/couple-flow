@@ -174,6 +174,7 @@ class TerminationManager(ManagerBase):
                 self._term_dones[rows] = False
                 self._term_dones[rows, i] = True
         # return combined termination signal
+
         return self._truncated_buf | self._terminated_buf
 
     def get_term(self, name: str) -> torch.Tensor:

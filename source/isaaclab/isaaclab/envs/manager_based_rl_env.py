@@ -298,6 +298,7 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
             rgb_data = np.frombuffer(rgb_data, dtype=np.uint8).reshape(*rgb_data.shape)
             # return the rgb data
             # note: initially the renerer is warming up and returns empty data
+            # import pdb; pdb.set_trace()
             if rgb_data.size == 0:
                 return np.zeros((self.cfg.viewer.resolution[1], self.cfg.viewer.resolution[0], 3), dtype=np.uint8)
             else:
@@ -358,6 +359,7 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
         # update the curriculum for environments that need a reset
         self.curriculum_manager.compute(env_ids=env_ids)
         # reset the internal buffers of the scene elements
+
         self.scene.reset(env_ids)
         # apply events such as randomizations for environments that need a reset
         if "reset" in self.event_manager.available_modes:

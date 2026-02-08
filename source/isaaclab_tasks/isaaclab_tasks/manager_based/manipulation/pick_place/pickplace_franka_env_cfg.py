@@ -56,27 +56,26 @@ def add_collision(usd_path_load, usd_path_save):
 @configclass
 class ObjectTableSceneCfg(InteractiveSceneCfg):
 
-    # Tiled camera for observation - matches viewport camera view
-    tiled_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="/World/envs/env_.*/Camera2",
-        offset=TiledCameraCfg.OffsetCfg(
-            pos=(0.0, 1.4, 2.0), 
-            rot=(.65, .27, .27, -.65),
-            convention="world"
-        ),
-        update_latest_camera_pose=True,
-        data_types=["rgb"],
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=35.0, 
-            focus_distance=400.0, 
-            horizontal_aperture=34.32365, 
-            clipping_range=(0.01, 10000000.0)
-        ),
-        width=256,
-        height=256,
-    )
+    # tiled_camera: TiledCameraCfg = TiledCameraCfg(
+    #     prim_path="/World/envs/env_.*/Camera2",
+    #     offset=TiledCameraCfg.OffsetCfg(
+    #         pos=(0.0, 1.4, 2.0), 
+    #         rot=(.65, .27, .27, -.65),
+    #         convention="world"
+    #     ),
+    #     update_latest_camera_pose=True,
+    #     data_types=["rgb"],
+    #     spawn=sim_utils.PinholeCameraCfg(
+    #         focal_length=35.0, 
+    #         focus_distance=400.0, 
+    #         horizontal_aperture=34.32365, 
+    #         clipping_range=(0.01, 10000000.0)
+    #     ),
+    #     width=256,
+    #     height=256,
+    # )
     
-    packing_table = AssetBaseCfg(
+    packing_table = AssetBaseCfg(                              #takes huge memory
         prim_path="/World/envs/env_.*/PackingTable2",
         init_state=AssetBaseCfg.InitialStateCfg(pos=[0.0, 0.55, 0.0], rot=[1.0, 0.0, 0.0, 0.0]),
         spawn=UsdFileCfg(
@@ -95,25 +94,33 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             ),
         ),
     )
+    # table = AssetBaseCfg(
+    #     prim_path="/World/envs/env_.*/Table",
+    #     init_state=AssetBaseCfg.InitialStateCfg(pos=[0.0, 0.55, 1.0], rot=[1.0, 0.0, 0.0, 0.0]),
+    #     spawn=UsdFileCfg(
+    #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd",
+    #         scale=(1.5, 1.0, 1.0),
+    #     )
+    # )
 
-    tray = AssetBaseCfg(
-        prim_path="/World/envs/env_.*/Tray",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.41, 0.42, 1], rot=[0.707, 0.707, 0.0, 0.0]),
-        spawn=UsdFileCfg(
-            usd_path=f"/workspace/isaaclab/usd_extracted/pink_plate_csm/pink_plate.usd",
-            scale=(0.15, 0.15, 0.15),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                rigid_body_enabled=True,
-                kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
-                disable_gravity=False,
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                max_angular_velocity=1000.0,
-                max_linear_velocity=1000.0,
-                max_depenetration_velocity=5.0,
-            ),
-        ),
-    )
+    # tray = AssetBaseCfg(
+    #     prim_path="/World/envs/env_.*/Tray",
+    #     init_state=AssetBaseCfg.InitialStateCfg(pos=[0.41, 0.42, 1], rot=[0.707, 0.707, 0.0, 0.0]),
+    #     spawn=UsdFileCfg(
+    #         usd_path=f"/workspace/isaaclab/usd_extracted/pink_plate_csm/pink_plate.usd",
+    #         scale=(0.15, 0.15, 0.15),
+    #         # rigid_props=sim_utils.RigidBodyPropertiesCfg(
+    #         #     rigid_body_enabled=True,
+    #         #     kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
+    #         #     disable_gravity=False,
+    #         #     solver_position_iteration_count=16,
+    #         #     solver_velocity_iteration_count=1,
+    #         #     max_angular_velocity=0.0,
+    #         #     max_linear_velocity=0.0,
+    #         #     max_depenetration_velocity=5.0,
+    #         # ),
+    #     ),
+    # )
 
     sushi = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Sushi",
@@ -121,7 +128,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.5, 1.02], rot=[-.028, -.486, -.867, .102]),
         spawn=UsdFileCfg(
             # Use the physics-enabled sushi USD created by to_usd.py
-            usd_path="/workspace/isaaclab/source/gr1t2/sushi_csm/sushi.usd",
+            usd_path="/workspace/isaaclab/usd_extracted/sushi_csm/sushi2.usd",
             # usd_path="/workspace/isaaclab/source/gr1t2/YCB/Axis_Aligned/011_sushi.usd",
             scale=(.08, .08, .08),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -145,8 +152,10 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.36, 1], rot=[.707, .707, 0, 0]),
         spawn=UsdFileCfg(
             # Use the physics-enabled apple USD
-            usd_path="/workspace/isaaclab/usd_extracted/apple_csm/apple.usd",
+            usd_path="/workspace/isaaclab/usd_extracted/apple_csm/apple2.usd",
+            # usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
             scale=(.06, .06, .06),
+            # scale=(.8, .8, .8),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,
                 kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
@@ -170,7 +179,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         spawn=UsdFileCfg(
             # Use the physics-enabled mug USD
             # usd_path="/workspace/isaaclab/source/gr1t2/Mugs/SM_Mug_C1.usd",
-            usd_path="/workspace/isaaclab/usd_extracted/mug_csm/mug.usd",
+            usd_path="/workspace/isaaclab/usd_extracted/mug_csm/mug2.usd",
             # scale=(.009, .009, .009),
             scale=(.1, .1, .1),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -183,13 +192,13 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 max_linear_velocity=1000.0,
                 max_depenetration_velocity=5.0,
             ),
-            ############################## FOR MUG CONVEX DECOMPOSITION #####################################
+            ############################# FOR MUG CONVEX DECOMPOSITION #####################################
             collision_props=sim_utils.CollisionPropertiesCfg(
                 collision_enabled=True,
                 contact_offset=0.02,
                 rest_offset=0.01,
             ),
-            #################################################################################################
+            ################################################################################################
 
             # Mug mass (typical mug is around 0.25kg)
             mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
@@ -210,7 +219,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 "panda_joint5": 0.0,     
                 "panda_joint6": 1.7,
                 "panda_joint7": 1.57/2,
-                "panda_finger_joint.*": 0.00,
+                "panda_finger_joint.*": 0.04,
             },   
             pos=(0, 0, .7),
             rot=(0.707, 0.0, 0.0, 0.707),
@@ -274,12 +283,12 @@ class ObservationsCfg:
         )
         robot_root_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
         robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        sushi_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("sushi")})
-        sushi_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("sushi")})
+        # sushi_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("sushi")})
+        # sushi_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("sushi")})
         apple_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("apple")})
         apple_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("apple")})
-        mug_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("mug")})
-        mug_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("mug")})
+        # mug_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("mug")})
+        # mug_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("mug")})
 
         # Franka end-effector observations
         eef_pos = ObsTerm(func=mdp.get_franka_eef_pos)
@@ -299,44 +308,82 @@ class TerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    sushi_dropping = DoneTerm(
-        func=mdp.root_height_below_minimum, params={"minimum_height": 0.5, "asset_cfg": SceneEntityCfg("sushi")}
+    # sushi_dropping = DoneTerm(
+    #     func=mdp.root_height_below_minimum, params={"minimum_height": 0.5, "asset_cfg": SceneEntityCfg("sushi")}
+    # )
+
+    # apple_dropping = DoneTerm(
+    #     func=mdp.root_height_below_minimum, params={"minimum_height": 0.5, "asset_cfg": SceneEntityCfg("apple")}
+    # )
+
+    # mug_dropping = DoneTerm(
+    #     func=mdp.root_height_below_minimum, params={"minimum_height": 0.5, "asset_cfg": SceneEntityCfg("mug")}
+    # )
+
+    # sushi_on_tray = DoneTerm(
+    #     func=mdp.object_touching_tray,
+    #     params={
+    #         "object_cfg": SceneEntityCfg("sushi"),
+    #         # "tray_cfg": SceneEntityCfg("tray"),
+    #         "max_distance_x": 0.10,
+    #         "max_distance_y": 0.10,
+    #         "max_distance_z": 0.05,
+    #         "min_distance_z": -0.02,
+    #         "max_velocity": 1.0,
+    #     },
+    # )
+
+    apple_on_tray = DoneTerm(
+        func=mdp.object_touching_tray,
+        params={
+            "object_cfg": SceneEntityCfg("apple"),
+            # "tray_cfg": SceneEntityCfg("tray"),
+            "max_distance_x": 0.10,
+            "max_distance_y": 0.10,
+            "max_distance_z": 0.05,
+            "min_distance_z": -0.02,
+            "max_velocity": 1.0,
+        },
     )
 
-    apple_dropping = DoneTerm(
-        func=mdp.root_height_below_minimum, params={"minimum_height": 0.5, "asset_cfg": SceneEntityCfg("apple")}
-    )
-
-    mug_dropping = DoneTerm(
-        func=mdp.root_height_below_minimum, params={"minimum_height": 0.5, "asset_cfg": SceneEntityCfg("mug")}
-    )
-
+    # mug_on_tray = DoneTerm(
+    #     func=mdp.object_touching_tray,
+    #     params={
+    #         "object_cfg": SceneEntityCfg("mug"),
+    #         # "tray_cfg": SceneEntityCfg("tray"),
+    #         "max_distance_x": 0.10,
+    #         "max_distance_y": 0.10,
+    #         "max_distance_z": 0.05,
+    #         "min_distance_z": -0.02,
+    #         "max_velocity": 1.0,
+    #     },
+    # )
 
 @configclass
 class EventCfg:
     """Configuration for events."""
 
     # Reset joint 1 to zero position
-    reset_joint1 = EventTerm(
-        func=mdp.reset_joints_by_scale,
-        mode="reset",
-        params={
-            "position_range": (0.0, 0.0),  # Set joint 1 to zero
-            "velocity_range": (0.0, 0.0),  # Zero velocities
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint1"]),
-        },
-    )
+    # reset_joint1 = EventTerm(
+    #     func=mdp.reset_joints_by_scale,
+    #     mode="reset",
+    #     params={
+    #         "position_range": (0.0, 0.0),  # Set joint 1 to zero
+    #         "velocity_range": (0.0, 0.0),  # Zero velocities
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint1"]),
+    #     },
+    # )
 
-    # Reset other joints to their configured initial positions
-    reset_other_joints = EventTerm(
-        func=mdp.reset_joints_by_scale,
-        mode="reset",
-        params={
-            "position_range": (1, 1),  # Keep exact initial positions
-            "velocity_range": (0.0, 0.0),  # Zero velocities
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint[2-7]", "panda_finger_joint.*"]),
-        },
-    )
+    # # Reset other joints to their configured initial positions
+    # reset_other_joints = EventTerm(
+    #     func=mdp.reset_joints_by_scale,
+    #     mode="reset",
+    #     params={
+    #         "position_range": (1, 1),  # Keep exact initial positions
+    #         "velocity_range": (0.0, 0.0),  # Zero velocities
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint[2-7]", "panda_finger_joint.*"]),
+    #     },
+    # )
 
     reset_all_joints = EventTerm(
         func=mdp.reset_joints_by_scale,
@@ -344,7 +391,16 @@ class EventCfg:
         params={
             "position_range": (1.0, 1.0),  # Keep exact initial positions
             "velocity_range": (0.0, 0.0),
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint.*", "panda_finger_joint.*"]),
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint.*"]),
+        },
+    )
+    reset_gripper = EventTerm(
+        func=mdp.reset_joints_by_scale,
+        mode="reset",
+        params={
+            "position_range": (1.0, 1.0),  # Keep exact initial positions
+            "velocity_range": (0.0, 0.0),
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_finger_joint.*"]),
         },
     )
 

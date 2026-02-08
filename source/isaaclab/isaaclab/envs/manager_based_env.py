@@ -356,7 +356,7 @@ class ManagerBasedEnv:
         if self.sim.has_rtx_sensors() and self.cfg.rerender_on_reset:
             self.sim.render()
 
-        # trigger recorder terms for post-reset calls
+        # trigger recorde
         self.recorder_manager.record_post_reset(env_ids)
 
         # compute observations

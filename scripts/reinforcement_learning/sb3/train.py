@@ -13,7 +13,7 @@ import contextlib
 import signal
 import sys
 from pathlib import Path
-
+from omegaconf import OmegaConf
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -82,7 +82,7 @@ import omni
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
 from stable_baselines3.common.vec_env import VecNormalize
-
+from stable_baselines3.common.callbacks import BaseCallback
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -100,6 +100,40 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
+import wandb
+from collections import deque
+from dataclasses import asdict
+
+
+class PPOCallback(BaseCallback):
+    """Custom callback for logging to wandb"""
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+    
+    def _on_step(self) -> bool:
+        return True
+    
+    def _on_rollout_end(self) -> None:
+        """Log metrics after rollout"""
+        
+        # Prepare wandb logs
+        wandb_logs = {
+            'train/timesteps': self.num_timesteps,
+        }
+        
+        # Extract PPO training metrics from the model's logger
+        if hasattr(self.model, 'logger') and self.model.logger is not None:
+            logger_dict = self.model.logger.name_to_value
+            
+            # Log all metrics from the logger
+            if logger_dict:
+                for key, value in logger_dict.items():
+                    wandb_logs[key] = value
+        
+        # Log all collected metrics to wandb
+        wandb.log(wandb_logs)
+        
+    
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
@@ -108,6 +142,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.seed == -1:
         args_cli.seed = random.randint(0, 10000)
 
+    # Convert dataclass config to dictionary for wandb
+    if hasattr(env_cfg, '__dataclass_fields__'):
+        env_cfg_dict = asdict(env_cfg)
+    else:
+        env_cfg_dict = OmegaConf.to_container(env_cfg, resolve=True)
+    
+    wandb.init(
+        project="isaac-franka-ppo",
+        name="sb3-ppo-run",
+        config=env_cfg_dict
+    )
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["seed"]
@@ -122,7 +167,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # directory for logging into
     run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(os.path.join("logs", "sb3", args_cli.task))
+    log_root_path = os.path.abspath(os.path.join("source/logs", "sb3", args_cli.task))
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {run_info}")
@@ -198,10 +243,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent = PPO(policy_arch, env, verbose=1, tensorboard_log=log_dir, **agent_cfg)
     if args_cli.checkpoint is not None:
         agent = agent.load(args_cli.checkpoint, env, print_system_info=True)
-
+    ppocallback = PPOCallback(verbose=1)
     # callbacks for agent
     checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
-    callbacks = [checkpoint_callback, LogEveryNTimesteps(n_steps=args_cli.log_interval)]
+    callbacks = [checkpoint_callback, LogEveryNTimesteps(n_steps=args_cli.log_interval), ppocallback]
 
     # train the agent
     with contextlib.suppress(KeyboardInterrupt):

@@ -446,6 +446,7 @@ class InteractiveScene:
                 Defaults to None (all instances).
         """
         # -- assets
+        
         for articulation in self._articulations.values():
             articulation.reset(env_ids)
         for deformable_object in self._deformable_objects.values():
@@ -557,7 +558,6 @@ class InteractiveScene:
         for asset_name, surface_gripper in self._surface_grippers.items():
             asset_state = state["gripper"][asset_name]
             surface_gripper.set_grippers_command(asset_state)
-
         # write data to simulation to make sure initial state is set
         # this propagates the joint targets to the simulation
         self.write_data_to_sim()

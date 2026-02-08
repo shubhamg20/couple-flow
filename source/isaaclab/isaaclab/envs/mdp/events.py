@@ -18,7 +18,7 @@ import math
 import re
 import torch
 from typing import TYPE_CHECKING, Literal
-
+import cv2
 import carb
 import omni.physics.tensors.impl.api as physx
 from isaacsim.core.utils.extensions import enable_extension
@@ -1290,7 +1290,7 @@ def reset_root_state_from_terrain(
     asset.write_root_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
     asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)
 
-
+from pathlib import Path
 def reset_joints_by_scale(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor,
@@ -1311,14 +1311,13 @@ def reset_joints_by_scale(
         iter_env_ids = env_ids[:, None]
     else:
         iter_env_ids = env_ids
-
     # get default joint state
     joint_pos = asset.data.default_joint_pos[iter_env_ids, asset_cfg.joint_ids].clone()
     joint_vel = asset.data.default_joint_vel[iter_env_ids, asset_cfg.joint_ids].clone()
 
-    # scale these values randomly
     joint_pos *= math_utils.sample_uniform(*position_range, joint_pos.shape, joint_pos.device)
     joint_vel *= math_utils.sample_uniform(*velocity_range, joint_vel.shape, joint_vel.device)
+
 
     # clamp joint pos to limits
     joint_pos_limits = asset.data.soft_joint_pos_limits[iter_env_ids, asset_cfg.joint_ids]
@@ -1338,15 +1337,22 @@ def reset_joints_by_scale(
             print(f"Joint {i:2d}: {name:20s} | Pos: {pos:8.4f} | Vel: {vel:8.4f}")
         print("=" * 60)
 
-
+    # import pdb; pdb.set_trace()
     # # set into the physics simulation
     # import pdb; pdb.set_trace()
     # print_joint_data(env)
     # joint_pos = torch.tensor([0,-.7, .2, -2.4, 0, 1.5*1.57, 1.57/2] , device=env.device)
     # joint_vel = torch.zeros((1, 7), device=env.device)
-    # robot = env.scene['robot'].write_joint_state_to_sim(torch.tensor([0,-.7, .2, -2.4, 0, 1.25*1.57, 1.57/2] , device=env.device), joint_vel, joint_ids=[0, 1, 2, 3, 4, 5, 6], env_ids=env_ids)
-    # for _ in range(1): env.sim.step();env.sim.render()
+    # robot = env.scene['robot'].write_joint_state_to_sim(torch.tensor([0,-.7, .2, -2.4, 0, 1.25*1.57, 1.57/2] , device=env.device), joint_vel, joint_ids=[0, 1, 2, 3, 4, 5, 6], env_ids=env_ids)    
+    # robot = env.scene['robot'].write_joint_state_to_sim(torch.tensor([1.57/2, 1.57/2] , device=env.device), joint_vel, joint_ids=[7,8], env_ids=env_ids)
 
+    # for _ in range(1): env.sim.step();env.sim.render()
+    # robot = env.scene['robot'].write_joint_state_to_sim(torch.tensor([1.57/2, 1.57/2] , device=env.device), joint_vel, joint_ids=[7,8], env_ids=env_ids)
+    # img = env.scene["tiled_camera"].data.output["rgb"][0].clone()
+    # save_path = Path("/workspace/IsaacLab/source") / "debug_reset_joints_by_scale.png"
+    # cv2.imwrite(str(save_path), img.cpu().detach().numpy())
+
+    
     asset.write_joint_state_to_sim(joint_pos, joint_vel, joint_ids=asset_cfg.joint_ids, env_ids=env_ids)
 
 

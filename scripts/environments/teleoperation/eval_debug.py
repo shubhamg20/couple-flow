@@ -45,11 +45,11 @@ app_launcher_args = vars(args_cli)
 TRAIN_DATASET_PATH = "source/serl-flow/dataset/train_paired.pkl"  #required to extract stats
 VAL_DATASET_PATH = "source/serl-flow/dataset/validation_paired.pkl"
 # task_name = "steering-flow-mixed"
-task_name = "flow-mixed"
-epoch_num = "1000"
+task_name = "flow-unpaired_new_16horizon_apple"
+epoch_num = "900"
 HOT_START_STEP = 0.00
 actual_action = True
-bc_policy = True # true for gaussian, false for couple flow
+bc_policy = True # truef for gaussian, false for couple flow
 action_replay = False 
 state_replay = False
 latent =  None 
@@ -158,6 +158,7 @@ def load_model_and_config(checkpoint_path, device='cuda'):
 
 def get_object_poses_from_env(env):
     object_names = ["apple", "mug", "sushi"]
+    object_names = ["apple"]
     object_poses = {}
 
     for obj_name in object_names:
@@ -358,6 +359,7 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
     if episode_idx > 0: start_idx = dataset.episode_ends[episode_idx - 1]
 
     apply_demo_objects(env, dataset.train_data["blocks_init_dict"][episode_idx], env_ids)
+    _ = env.reset()
     #For visualization / evaluation
     gt_robot_data = {
         "images" : dataset.train_data['gt_robot_images'][start_idx:end_idx],
@@ -417,19 +419,17 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
         # for step_idx in tqdm(range(int(max_steps))):
         preds = []
         gts = []
-        for _ in range(10):
-            zer_action = torch.zeros(7, device=device)
-            zer_action[-1] = 1.0
-            _ = env.step(zer_action.unsqueeze(0))
-        for step_idx in tqdm(range(int(len(gt_states)-16))):
+        horizon=8
+        for step_idx in tqdm(range(0, int(len(gt_states)+50), horizon)):
         # for step_idx in tqdm(range(30)):
 
-            if terminated or truncated:
+            if terminated:
+                print("🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳🥳")
                 break
 
             obs_stack = torch.stack(list(obs_history), dim=0)  # [obs_horizon, state_dim]
             obs_cond = obs_stack.flatten().unsqueeze(0)  # [1, obs_horizon * state_dim]
-            
+            print("obs_cond:", obs_cond[:])
             # Use human action as initialization (optional)
             human_action_chunk = torch.from_numpy(
                 dataset.normalized_train_data['human_action'][start_idx+step_idx:start_idx+step_idx + pred_horizon]
@@ -438,132 +438,42 @@ def run_diffusion_policy(env, dataset, episode_idx, nets, norm_stats, cfg, num_s
             gt_action_chunk = torch.from_numpy(
                 dataset.normalized_train_data['action'][start_idx+step_idx:start_idx+step_idx + pred_horizon]
             ).to(device)
-            # Pad to match full action dimension and pred_horizon
-            # if human_action_chunk.shape[0] < pred_horizon:
-            #     padding = torch.zeros(pred_horizon - human_action_chunk.shape[0], 
-            #                         human_action_chunk.shape[1], device=device)
-            #     human_action_chunk = torch.cat([human_action_chunk, padding], dim=0)
-            # action_dim = 7
-            # if not bc_policy:
-            #     if not torch.all(human_action_chunk == -1):
-            #         if human_action_chunk.shape[-1] < action_dim:
-            #             diff_dims = action_dim - human_action_chunk.shape[-1]
-            #             noise = torch.randn(*human_action_chunk.shape[:-1], diff_dims, device=device)
-            #             print("using human action with noise")
-            #             x = torch.cat([human_action_chunk[:, :3], noise, human_action_chunk[:, 3:]], dim=-1)
-            #             x = x.unsqueeze(0)
-            #         else:
-            #             x = human_action_chunk.unsqueeze(0)
-            #     else:
-            #         x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)   
-                
-            # else:
-            #     x = torch.randn(human_action_chunk.shape[0], action_dim, device=device).unsqueeze(0)
-
-            # _t = 0 # 0.2-0.8
-            # x = x
-
-
+        
             human_context = dataset.normalized_train_data['human_context'][start_idx]
             # import pdb; pdb.set_trace()
             human_context = torch.from_numpy(human_context).to(device)
             noise_net_input = torch.cat([obs_cond, human_context.unsqueeze(0)], dim=-1)
             x = torch.randn(human_action_chunk.shape[0], 7, device=device).unsqueeze(0)
-            # x, _ = nets['noise_net'].forward(noise_net_input)
-            # x = torch.clamp(x, min=-0.3, max=0.3)
-            # x_pred = x.clone().squeeze(0)[0]
-            # preds.append(x_pred.cpu().numpy())
-            # x_gt = inv_flow_simple(nets["flow_net"], gt_action_chunk.unsqueeze(0), obs_cond, steps=100).squeeze(0)[0]
-            # gts.append(x_gt.cpu().numpy())
+        
             # Flow matching inference
-            num_steps = 50
+            num_steps = 10
             dt = 1.0 / num_steps
             # for fm_step in range(num_steps):
             # for fm_step in range(int((.0)*num_steps), num_steps):
             for fm_step in range(int(HOT_START_STEP*num_steps), num_steps):
                 t = torch.tensor(fm_step * dt, device=device)
                 t_batch = t.unsqueeze(0)
-                vt = nets['flow_net'](x, t_batch, global_cond=obs_cond)
+                vt = nets['flow_net'](x, t_batch, global_cond=obs_cond.to(device))
                 x = x + dt * vt
 
-            predicted_chunk = x.squeeze(0)[:8]  # [pred_horizon, action_dim]
-            
-            # Add predicted actions to the queue for their corresponding timesteps
-            for act_t, act in enumerate(predicted_chunk):
-                target_step = step_idx + act_t
-                if target_step < max_steps:
-                    if target_step not in actions_queue:
-                        actions_queue[target_step] = []
-                    actions_queue[target_step].append(act)
-            
-            action = torch.stack(actions_queue[step_idx], dim=0).mean(dim=0)
-            # Clean up used actions
-            del actions_queue[step_idx]
-            
-            if action_replay:
-                action = gt_action_chunk[0]  
-            action = action.detach().cpu()
-            # action = unnormalize_data(action, stats=norm_stats['action'])
-            # print(action)
-            print("action:", action[-1])
-            # Track gripper state change and hold for 2 seconds (assuming 30Hz, ~60 steps)
-            if not hasattr(run_diffusion_policy, "gripper_hold_counter"):
-                run_diffusion_policy.gripper_hold_counter = 0
-                run_diffusion_policy.last_gripper_value = prev_gripper
-
-            gripper_changed = abs(action[-1] - run_diffusion_policy.last_gripper_value) > 1e-3
-            if gripper_changed:
-                run_diffusion_policy.gripper_hold_counter = 60  # Hold for 2 seconds
-                run_diffusion_policy.last_gripper_value = action[-1]
-
-            # if action[-1] <= .5:
-            #     action[-1] = -.01  # close
-            #     prev_gripper = action[-1]
-            #     run_diffusion_policy.last_gripper_value = action[-1]
-            # elif action[-1] > .5 :
-            #     action[-1] = 1.0  # open
-            #     prev_gripper = action[-1]
-            #     run_diffusion_policy.last_gripper_value = action[-1]
-            
-            if step_idx < int(.0*max_steps): 
-                if actual_action:
-                    final_action = gt_action_chunk[0]
-                elif not absolute_actions:
-                    final_action = _delta_action(gt_action_chunk[0])
-                else: 
-                    final_action = absolute_to_relative_action(current_obs, gt_action_chunk[0])
-                obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0))
-                actions_queue = {}
-            else: 
-                if actual_action:
-                    final_action = action
-                elif not absolute_actions:
-                    # print("delta action:", action)
-                    # print("human action chunk:", human_action_chunk[0])
-                    print("current obs:", current_obs[:7])
-                    final_action = _delta_action(action)
-                    # final_action = action
-                else: 
-                    final_action = absolute_to_relative_action(current_obs, action)
-                    print("absolute action:", action)
-                    print("current obs:", current_obs[:7])
+            predicted_chunk = x.squeeze(0)[:]  # [pred_horizon, action_dim]
+            for i in range(horizon):
+                final_action = predicted_chunk[i]
                 obs, reward, terminated, truncated, info = env.step(final_action.unsqueeze(0)) 
-            image = get_image(env)
+                image = get_image(env)
+                trajectory_data['images'].append(image.cpu().numpy())
+
             object_poses = get_object_poses_from_env(env)
             
             # Get new observation
             if state_replay: current_obs = gt_states[step_idx]
             else: current_obs = get_observation_from_env(env, episode_ends, latent_variable)
-            # current_obs[6] = 0.0
-            # if step_idx < 5:
-            #     current_obs[6] = .04
             obs_history.append(current_obs)
 
             # Record trajectory
             if save_trajectory:
                 trajectory_data['observations'].append(current_obs.cpu().numpy())
-                trajectory_data['images'].append(image.cpu().numpy())
-                trajectory_data['actions'].append(action.cpu().numpy())
+                trajectory_data['actions'].append(final_action.cpu().numpy())
                 trajectory_data['object_poses'].append(object_poses)
                 trajectory_data['eef_poses'].append({
                     'pos': current_obs[:3].cpu().numpy(),
