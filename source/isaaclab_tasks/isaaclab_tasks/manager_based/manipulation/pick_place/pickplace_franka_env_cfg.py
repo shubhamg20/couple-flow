@@ -31,8 +31,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.devices import OpenXRDevice, OpenXRDeviceCfg
 from isaaclab.devices.openxr.retargeters import Se3RelRetargeter, GripperRetargeter
 from isaaclab.devices.openxr.retargeters import Se3RelRetargeterCfg, GripperRetargeterCfg
-from . import mdp
-
+from isaaclab_tasks.manager_based.manipulation.pick_place import mdp
 from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: skip
 
 ############################## FOR MUG CONVEX DECOMPOSITION #####################################
@@ -57,7 +56,7 @@ def add_collision(usd_path_load, usd_path_save):
 class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     # tiled_camera: TiledCameraCfg = TiledCameraCfg(
-    #     prim_path="/World/envs/env_.*/Camera2",
+    #     prim_path="/World/envs/env_.*/Camera1",
     #     offset=TiledCameraCfg.OffsetCfg(
     #         pos=(0.0, 1.4, 2.0), 
     #         rot=(.65, .27, .27, -.65),
@@ -74,7 +73,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     #     width=256,
     #     height=256,
     # )
-    
+
     packing_table = AssetBaseCfg(                              #takes huge memory
         prim_path="/World/envs/env_.*/PackingTable2",
         init_state=AssetBaseCfg.InitialStateCfg(pos=[0.0, 0.55, 0.0], rot=[1.0, 0.0, 0.0, 0.0]),
@@ -122,37 +121,41 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     #     ),
     # )
 
-    sushi = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/Sushi",
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.5, 1.02], rot=[-.028, -.486, -.867, .102]),
-        spawn=UsdFileCfg(
-            # Use the physics-enabled sushi USD created by to_usd.py
-            usd_path="/workspace/isaaclab/usd_extracted/sushi_csm/sushi2.usd",
-            # usd_path="/workspace/isaaclab/source/gr1t2/YCB/Axis_Aligned/011_sushi.usd",
-            scale=(.08, .08, .08),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                rigid_body_enabled=True,
-                kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
-                disable_gravity=False,
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                max_angular_velocity=1000.0,
-                max_linear_velocity=1000.0,
-                max_depenetration_velocity=5.0,
-            ),
-            # Note: Mass is already defined in the USD file (0.12kg), but we can override it
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),  # Use realistic sushi mass
-        ),
-    )
+    # sushi = RigidObjectCfg(
+    #     prim_path="/World/envs/env_.*/Sushi",
+    #     init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]),
+    #     # init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.5, 1.02], rot=[-.028, -.486, -.867, .102]),
+    #     # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]), #apple exhange
+    #     spawn=UsdFileCfg(
+    #         # Use the physics-enabled sushi USD created by to_usd.py
+    #         usd_path="/workspace/isaaclab/usd_extracted/sushi_csm/sushi.usd",
+    #         # usd_path="/workspace/isaaclab/source/gr1t2/YCB/Axis_Aligned/011_sushi.usd",
+    #         scale=(.08, .08, .08),
+    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(
+    #             rigid_body_enabled=True,
+    #             kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
+    #             disable_gravity=False,
+    #             solver_position_iteration_count=16,
+    #             solver_velocity_iteration_count=1,
+    #             max_angular_velocity=1000.0,
+    #             max_linear_velocity=1000.0,
+    #             max_depenetration_velocity=5.0,
+    #         ),
+    #         # Note: Mass is already defined in the USD file (0.12kg), but we can override it
+    #         mass_props=sim_utils.MassPropertiesCfg(mass=0.05),  # Use realistic sushi mass
+    #     ),
+    # )
 
     apple = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Apple",
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.36, 1], rot=[.707, .707, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]),
+        # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.36, 1], rot=[.707, .707, 0, 0]),        
+        # init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]), #sushi exchange
+
+
         spawn=UsdFileCfg(
             # Use the physics-enabled apple USD
-            usd_path="/workspace/isaaclab/usd_extracted/apple_csm/apple2.usd",
+            usd_path="/workspace/isaaclab/usd_extracted/apple_csm/apple.usd",
             # usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
             scale=(.06, .06, .06),
             # scale=(.8, .8, .8),
@@ -171,39 +174,39 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    mug = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/Mug",
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.07, 0.35, 1.0], rot=[0, 0, 0, 1]),
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.37, 1.0], rot=[.0, 0.0, -.707, -.707]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.5, 1.0], rot=[.0, 0.0, -.707, -.707]),
-        spawn=UsdFileCfg(
-            # Use the physics-enabled mug USD
-            # usd_path="/workspace/isaaclab/source/gr1t2/Mugs/SM_Mug_C1.usd",
-            usd_path="/workspace/isaaclab/usd_extracted/mug_csm/mug2.usd",
-            # scale=(.009, .009, .009),
-            scale=(.1, .1, .1),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                rigid_body_enabled=True,
-                kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
-                disable_gravity=False,
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                max_angular_velocity=1000.0,
-                max_linear_velocity=1000.0,
-                max_depenetration_velocity=5.0,
-            ),
-            ############################# FOR MUG CONVEX DECOMPOSITION #####################################
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled=True,
-                contact_offset=0.02,
-                rest_offset=0.01,
-            ),
-            ################################################################################################
+    # mug = RigidObjectCfg(
+    #     prim_path="/World/envs/env_.*/Mug",
+    #     init_state=RigidObjectCfg.InitialStateCfg(pos=[0.07, 0.35, 1.0], rot=[0, 0, 0, 1]),
+    #     # init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.37, 1.0], rot=[.0, 0.0, -.707, -.707]),
+    #     # init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.5, 1.0], rot=[.0, 0.0, -.707, -.707]),
+    #     spawn=UsdFileCfg(
+    #         # Use the physics-enabled mug USD
+    #         # usd_path="/workspace/isaaclab/source/gr1t2/Mugs/SM_Mug_C1.usd",
+    #         usd_path="/workspace/isaaclab/usd_extracted/mug_csm/mug.usd",
+    #         # scale=(.009, .009, .009),
+    #         scale=(.1, .1, .1),
+    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(
+    #             rigid_body_enabled=True,
+    #             kinematic_enabled=False,  # Ensure object is dynamic, not kinematic
+    #             disable_gravity=False,
+    #             solver_position_iteration_count=16,
+    #             solver_velocity_iteration_count=1,
+    #             max_angular_velocity=1000.0,
+    #             max_linear_velocity=1000.0,
+    #             max_depenetration_velocity=5.0,
+    #         ),
+    #         ############################# FOR MUG CONVEX DECOMPOSITION #####################################
+    #         collision_props=sim_utils.CollisionPropertiesCfg(
+    #             collision_enabled=True,
+    #             contact_offset=0.02,
+    #             rest_offset=0.01,
+    #         ),
+    #         ################################################################################################
 
-            # Mug mass (typical mug is around 0.25kg)
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
-        ),
-    )
+    #         # Mug mass (typical mug is around 0.25kg)
+    #         mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+    #     ),
+    # )
     
     # Franka robot configured for pick-place manipulation tasks
     robot: ArticulationCfg = FRANKA_PANDA_HIGH_PD_CFG.replace(
@@ -212,16 +215,16 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             # Convert Euler degrees (0, 0, 0) to quaternion [w, x, y, z]
             # rot=R.from_euler("xyz", [90, 0, 0], degrees=True).as_quat()[[3, 0, 1, 2]].tolist(),
             joint_pos={
-                "panda_joint1": -.0,
-                "panda_joint2": -.7,
+                "panda_joint1": 0.0,
+                "panda_joint2": -0.7,
                 "panda_joint3": 0.0,
                 "panda_joint4": -2.4,  # This is within the valid range [-3.072, -0.070]
                 "panda_joint5": 0.0,     
                 "panda_joint6": 1.7,
-                "panda_joint7": 1.57/2,
+                "panda_joint7": 0.785,
                 "panda_finger_joint.*": 0.04,
             },   
-            pos=(0, 0, .7),
+            pos=(0.0, 0.0, 0.7),
             rot=(0.707, 0.0, 0.0, 0.707),
             # rot=(1.0, 0.0, 0.0, 0.0),
             # joint_vel={".*": 0.0},
@@ -410,6 +413,10 @@ class EventCfg:
     #                                   "x": [-0.03, 0.03],
     #                                   "y": [-0.04, 0.01],
     #                               },
+    #                             #   "pose_ranges": {
+    #                             #       "x": [-0.01, 0.00],
+    #                             #       "y": [-0.01, -0.01],
+    #                             #   },
     #                               "asset_cfgs": [
     #                                   SceneEntityCfg("sushi"),
     #                                   SceneEntityCfg("apple"),
@@ -434,8 +441,8 @@ class EventCfg:
     #     mode="reset",
     #     params={
     #         "pose_range": {
-    #             "x": [-0.03, 0.03],
-    #             "y": [-0.03, 0.03],
+    #             "x": [-0.02, 0.02],
+    #             "y": [-0.02, 0.02],
     #         },
     #         "velocity_range": {},
     #         "asset_cfg": SceneEntityCfg("apple"),
@@ -490,30 +497,5 @@ class PickPlaceFrankaEnvCfg(ManagerBasedRLEnvCfg):
         # we tick all the sensors based on the smallest update period (physics update period)
         # if self.scene.tiled_camera is not None:
         #     self.scene.tiled_camera.update_period = self.decimation * self.sim.dt
-        
-        # Add teleoperation devices for hand tracking support
-        self.teleop_devices = DevicesCfg(
-            devices={
-                "handtracking": OpenXRDeviceCfg(
-                    retargeters=[
-                        Se3RelRetargeterCfg(
-                            bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT,
-                            zero_out_xy_rotation=True,
-                            use_wrist_rotation=False,
-                            use_wrist_position=True,
-                            delta_pos_scale_factor=10.0,
-                            delta_rot_scale_factor=10.0,
-                            sim_device=self.sim.device,
-                        ),
-                        GripperRetargeterCfg(
-                            bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT, 
-                            sim_device=self.sim.device
-                        ),
-                    ],
-                    sim_device=self.sim.device,
-                    xr_cfg=self.xr,
-                ),
-            }
-        )
 
 

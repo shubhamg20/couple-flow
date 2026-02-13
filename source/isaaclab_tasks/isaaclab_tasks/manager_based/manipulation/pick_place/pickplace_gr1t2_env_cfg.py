@@ -101,8 +101,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     sushi = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Sushi",
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.5, 1.02], rot=[-.028, -.486, -.867, .102]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.1, 0.36, 1.02], rot=[-.028, -.486, -.867, .102]),
         spawn=UsdFileCfg(
             # Use the physics-enabled sushi USD created by to_usd.py
             usd_path="/workspace/isaaclab/source/gr1t2/sushi_csm/sushi.usd",
@@ -125,8 +124,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     apple = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Apple",
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.36, 1], rot=[.707, .707, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.00, 0.5, 1], rot=[.707, .707, 0, 0]),
         spawn=UsdFileCfg(
             # Use the physics-enabled apple USD
             usd_path="/workspace/isaaclab/usd_extracted/apple_csm/apple.usd",
@@ -149,8 +147,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     mug = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Mug",
         # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.07, 0.35, 1.0], rot=[0, 0, 0, 1]),
-        # init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.37, 1.0], rot=[.0, 0.0, -.707, -.707]),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.5, 1.0], rot=[.0, 0.0, -.707, -.707]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[.1, 0.37, 1.0], rot=[.0, 0.0, -.707, -.707]),
         spawn=UsdFileCfg(
             # Use the physics-enabled mug USD
             # usd_path="/workspace/isaaclab/source/gr1t2/Mugs/SM_Mug_C1.usd",

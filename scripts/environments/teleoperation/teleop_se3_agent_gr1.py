@@ -12,7 +12,6 @@ from typing import Optional, Dict, List, Any
 
 from isaaclab.app import AppLauncher
 from scipy.spatial.transform import Rotation as R
-from isaaclab.utils import math
 
 parser = argparse.ArgumentParser(description="Teleoperation for Isaac Lab environments with per-episode recording.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
