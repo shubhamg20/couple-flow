@@ -1093,6 +1093,162 @@ def reset_root_state_uniform(
     asset.write_root_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
     asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)
 
+def swap_objects(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    pose_ranges: dict[str, tuple[float, float]],
+    asset_cfgs: list[SceneEntityCfg],
+    min_distance: float = 0.02,
+):
+    """Reset multiple assets with randomly swapped positions to avoid collisions.
+    
+    This function permutes the initial positions among all specified assets, ensuring
+    that no two objects occupy the same position. Each object gets assigned a unique
+    position from the pool of all object positions, then applies uniform randomization
+    around that assigned position. After randomization, it checks for collisions and
+    re-samples positions until all objects are collision-free.
+
+    Args:
+        env: The environment instance.
+        env_ids: The environment indices to reset.
+        pose_ranges: Dictionary of pose ranges for randomization. Keys are axis names
+                    (x, y, z, roll, pitch, yaw) and values are (min, max) tuples.
+        asset_cfgs: List of SceneEntityCfg for all objects to swap positions.
+        min_distance: Minimum allowed distance between any two objects (default: 0.02m).
+    """
+    # Get all assets
+
+    assets = [env.scene[cfg.name] for cfg in asset_cfgs]
+    num_objects = len(assets)
+    device = assets[0].device
+    
+    # Collect default positions from all assets [num_objects, 3]
+    default_positions = torch.stack([
+        asset.data.default_root_state[0, 0:3].clone() 
+        for asset in assets
+    ], dim=0).to(device)
+    
+    # For each environment, create a random permutation of positions
+    num_envs = len(env_ids)
+    
+    # Generate random permutations for all environments at once
+    # Shape: [num_envs, num_objects]
+    perms = torch.stack([
+        torch.randperm(num_objects, device=device) 
+        for _ in range(num_envs)
+    ], dim=0)
+    
+    # Prepare pose randomization ranges
+    range_list = [pose_ranges.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
+    ranges = torch.tensor(range_list, device=device)
+    
+    # Store final positions for all objects in all environments
+    # Shape: [num_envs, num_objects, 3]
+    final_positions = torch.zeros((num_envs, num_objects, 3), device=device)
+    
+    # Generate collision-free positions for each environment
+    for env_idx in range(num_envs):
+        collision_free = False
+        
+        while not collision_free:
+            temp_positions = []
+            
+            # Generate positions for all objects in this environment
+            for obj_idx in range(num_objects):
+                # Get the assigned base position for this object
+                position_idx = perms[env_idx, obj_idx]
+                base_position = default_positions[position_idx]
+                
+                # Generate random offset
+                rand_sample = math_utils.sample_uniform(
+                    ranges[:3, 0], ranges[:3, 1], 
+                    (3,), 
+                    device=device
+                )
+                
+                # Apply randomization
+                position = base_position + rand_sample
+                temp_positions.append(position)
+            
+            # Stack positions for this environment [num_objects, 3]
+            temp_positions = torch.stack(temp_positions, dim=0)
+            
+            # Check for collisions (pairwise distances)
+            collision_free = True
+            for i in range(num_objects):
+                for j in range(i + 1, num_objects):
+                    distance = torch.norm(temp_positions[i] - temp_positions[j])
+                    if distance < min_distance:
+                        collision_free = False
+                        break
+                if not collision_free:
+                    break
+            
+            if collision_free:
+                final_positions[env_idx] = temp_positions
+            else: print(f"Collision detected in env {env_idx}, re-sampling positions.")
+    
+    # Apply the collision-free positions to each asset
+    for obj_idx, asset in enumerate(assets):
+        # Get root states for this asset
+        root_states = asset.data.default_root_state[env_ids].clone()
+        
+        # Get the final positions for this object across all environments
+        positions = final_positions[:, obj_idx, :] + env.scene.env_origins[env_ids]
+        
+        # Generate random samples for orientation only
+        rand_samples = math_utils.sample_uniform(
+            ranges[3:, 0], ranges[3:, 1], 
+            (num_envs, 3), 
+            device=device
+        )
+        
+        # Keep the default orientation but apply orientation randomization
+        orientations_delta = math_utils.quat_from_euler_xyz(
+            rand_samples[:, 0], 
+            rand_samples[:, 1], 
+            rand_samples[:, 2]
+        )
+        orientations = math_utils.quat_mul(root_states[:, 3:7], orientations_delta)
+        
+        # Velocities remain at default
+        velocities = root_states[:, 7:13]
+        
+        # Set into the physics simulation
+        asset.write_root_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
+        asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)
+        asset.data.root_state_w[env_ids, :3] = positions
+        asset.data.root_state_w[env_ids, 3:7] = orientations  
+        asset.data.root_state_w[env_ids, 7:13] = velocities
+        
+        # Update USD prim transforms to sync visual representation with physics
+        # This ensures that when clicking objects in Isaac, the axes show the correct transforms
+        stage = get_current_stage()
+        prim_paths = sim_utils.find_matching_prim_paths(asset.cfg.prim_path)
+        
+        for prim_idx, prim_path in enumerate(prim_paths):
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                # Get the base environment origin for this prim's environment
+                env_idx_for_prim = prim_idx % num_envs
+                env_origin = env.scene.env_origins[env_ids[env_idx_for_prim]]
+                
+                # Position relative to environment origin
+                pos_relative = positions[env_idx_for_prim] - env_origin
+                quat = orientations[env_idx_for_prim]
+                
+                # Convert quaternion to Gf.Quatd and then to rotation matrix
+                w, x, y, z = quat[0].item(), quat[1].item(), quat[2].item(), quat[3].item()
+                quat_gf = Gf.Quatd(w, x, y, z)
+                rotation = Gf.Rotation(quat_gf)
+                
+                # Create a transformation matrix from position and quaternion
+                transform = Gf.Matrix4d(rotation, Gf.Vec3d(pos_relative[0].item(), pos_relative[1].item(), pos_relative[2].item()))
+                
+                # Set the transform using AddTransformOp
+                xform = UsdGeom.Xformable(prim)
+                xform.ClearXformOpOrder()
+                xform.AddTransformOp().Set(transform)
 
 def reset_root_state_with_random_orientation(
     env: ManagerBasedEnv,

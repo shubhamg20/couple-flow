@@ -13,6 +13,8 @@
 **/*.usda
 **/*.usdc
 **/*.usdz
+**/*.pkl
+**/*.npz
 
 # Python
 .DS_Store
@@ -69,3 +71,6 @@ tests/
 
 # Docker history
 .isaac-lab-docker-history
+
+source/p-diff-exp
+source/couple-flow-policy

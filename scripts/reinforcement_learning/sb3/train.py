@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -13,13 +13,13 @@ import contextlib
 import signal
 import sys
 from pathlib import Path
-
+import wandb
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with Stable-Baselines3.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_length", type=int, default=400, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
@@ -36,6 +36,9 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Use a slower SB3 wrapper but keep all the extra training info.",
+)
+parser.add_argument(
+    "--ray-proc-id", "-rid", type=int, default=None, help="Automatically configured by Ray integration, otherwise None."
 )
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -72,13 +75,14 @@ signal.signal(signal.SIGINT, cleanup_pbar)
 
 """Rest everything follows."""
 
-import gymnasium as gym
-import numpy as np
+import logging
 import os
 import random
+import time
 from datetime import datetime
 
-import omni
+import gymnasium as gym
+import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
 from stable_baselines3.common.vec_env import VecNormalize
@@ -91,15 +95,66 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab.utils.io import dump_yaml
 
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
+# import logger
+logger = logging.getLogger(__name__)
 # PLACEHOLDER: Extension template (do not remove this comment)
+from stable_baselines3.common.callbacks import BaseCallback
 
+wandb.init(project="cube lift")
+
+class PPOCallback(BaseCallback):
+    """Custom callback for logging"""
+    def __init__(self, cfg, verbose=0):
+        super().__init__(verbose)
+        self.cfg = cfg
+    
+    def _on_step(self) -> bool:
+        """Called at each step, return True to continue training"""
+        return True
+    
+    def _on_rollout_end(self) -> None:
+        """Log metrics after rollout"""
+        # Prepare wandb logs
+        wandb_logs = {
+            'train/timesteps': self.num_timesteps,
+        }
+        # Extract PPO training metrics from the model's logger
+        if hasattr(self.model, 'logger') and hasattr(self.model.logger, 'name_to_value'):
+            logger_dict = self.model.logger.name_to_value
+            
+            # Map of metric names to log
+            metric_names = [
+                'train/approx_kl',
+                'train/clip_fraction',
+                'train/clip_range',
+                'train/entropy_loss',
+                'train/explained_variance',
+                'train/learning_rate',
+                'train/loss',
+                'train/n_updates',
+                'train/policy_gradient_loss',
+                'train/std',
+                'train/value_loss',
+            ]
+            
+            # Extract available metrics from logger
+            for metric_name in metric_names:
+                # Try both with and without 'train/' prefix
+                short_name = metric_name.replace('train/', '')
+                if metric_name in logger_dict:
+                    wandb_logs[metric_name] = logger_dict[metric_name]
+                elif short_name in logger_dict:
+                    wandb_logs[metric_name] = logger_dict[short_name]
+        
+        wandb.log(wandb_logs)
+        
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
@@ -122,16 +177,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # directory for logging into
     run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(os.path.join("logs", "sb3", args_cli.task))
+    log_root_path = os.path.abspath(os.path.join("source/logs", "sb3", args_cli.task))
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
+    # The Ray Tune workflow extracts experiment name using the logging line below, hence,
+    # do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {run_info}")
     log_dir = os.path.join(log_root_path, run_info)
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # save command used to run the script
     command = " ".join(sys.orig_argv)
@@ -147,7 +201,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env_cfg, ManagerBasedRLEnvCfg):
         env_cfg.export_io_descriptors = args_cli.export_io_descriptors
     else:
-        omni.log.warn(
+        logger.warning(
             "IO descriptors are only supported for manager based RL environments. No IO descriptors will be exported."
         )
 
@@ -172,6 +226,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print("[INFO] Recording videos during training.")
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
+    start_time = time.time()
 
     # wrap around environment for stable baselines
     env = Sb3VecEnvWrapper(env, fast_variant=not args_cli.keep_all_info)
@@ -201,7 +257,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # callbacks for agent
     checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
-    callbacks = [checkpoint_callback, LogEveryNTimesteps(n_steps=args_cli.log_interval)]
+    ppo_callback = PPOCallback(agent_cfg, verbose=1)
+    callbacks = [checkpoint_callback, LogEveryNTimesteps(n_steps=args_cli.log_interval), ppo_callback]
 
     # train the agent
     with contextlib.suppress(KeyboardInterrupt):
@@ -219,6 +276,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env, VecNormalize):
         print("Saving normalization")
         env.save(os.path.join(log_dir, "model_vecnormalize.pkl"))
+
+    print(f"Training time: {round(time.time() - start_time, 2)} seconds")
 
     # close the simulator
     env.close()

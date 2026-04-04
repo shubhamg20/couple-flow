@@ -70,6 +70,16 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
     source: .isaac-lab-docker-history
     target: ${DOCKER_USER_HOME}/.bash_history
 
+  - type: bind
+    source: /home/shubham/summer/usd_extracted
+    target: ${DOCKER_USER_HOME}/usd_extracted
+  - type: bind
+    source: /home/weirdlab/Documents/summers/IsaacLab/bourbon_assets
+    target: ${DOCKER_USER_HOME}/bourbon_assets
+  - type: bind
+    source: ../openxr
+    target: /openxr
+    
 x-default-isaac-lab-environment: &default-isaac-lab-environment
   - ISAACSIM_PATH=${DOCKER_ISAACLAB_PATH}/_isaac_sim
   - OMNI_KIT_ALLOW_ROOT=1
